@@ -6,3 +6,6 @@
 *.ico binary
 *.png binary
 *.zip binary
+
+# 셸 스크립트는 Git Bash 에서 돌아가도록 LF 유지
+*.sh text eol=lf

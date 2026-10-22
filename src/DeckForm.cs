@@ -14,7 +14,7 @@ namespace WinDeck
     /// </summary>
     public class DeckForm : Form
     {
-        const int HotkeyId = 0x5D01;
+        const int HotkeyIdBase = 0x5D01;
 
         AppConfig cfg;
         readonly bool systemHooks;
@@ -24,6 +24,11 @@ namespace WinDeck
         readonly ToolTip tip;
         readonly ContextMenuStrip keyMenu, panelMenu;
         readonly Timer foregroundTimer;
+        readonly Timer modifierTimer;
+        readonly Dictionary<int, HotkeyEntry> hotkeys = new Dictionary<int, HotkeyEntry>();
+        string lastHotkeyFailure = "";
+        int pendingPage = -1, pendingButton = -1;
+        DateTime pendingDeadline;
         readonly Font titleFont, countFont, tipTitleFont, tipBodyFont, tipDetailFont;
         NotifyIcon tray;
         ContextMenuStrip trayMenu;
@@ -90,6 +95,15 @@ namespace WinDeck
             foregroundTimer.Tick += delegate { ActionRunner.TrackForeground(); };
             foregroundTimer.Start();
 
+            // 버튼 단축키: 사용자가 Ctrl/Alt 등을 뗀 뒤에 실행해야 문장이 Ctrl+글자로 입력되지 않는다.
+            modifierTimer = new Timer { Interval = 25 };
+            modifierTimer.Tick += delegate
+            {
+                if (InputSender.ModifiersDown() && DateTime.Now < pendingDeadline) return;
+                modifierTimer.Stop();
+                RunPendingButton();
+            };
+
             ApplyConfig(true);
         }
 
@@ -132,9 +146,10 @@ namespace WinDeck
                 m.Result = (IntPtr)Native.MA_NOACTIVATE;
                 return;
             }
-            if (m.Msg == Native.WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
+            if (m.Msg == Native.WM_HOTKEY)
             {
-                TogglePanel();
+                HotkeyEntry entry;
+                if (hotkeys.TryGetValue(m.WParam.ToInt32(), out entry)) OnHotkey(entry);
                 return;
             }
             base.WndProc(ref m);
@@ -154,12 +169,12 @@ namespace WinDeck
             {
                 dwmBorder = false;
             }
-            RegisterHotkey();
+            RegisterHotkeys();
         }
 
         protected override void OnHandleDestroyed(EventArgs e)
         {
-            Native.UnregisterHotKey(Handle, HotkeyId);
+            UnregisterHotkeys();
             base.OnHandleDestroyed(e);
         }
 
@@ -195,6 +210,7 @@ namespace WinDeck
             if (disposing)
             {
                 foregroundTimer.Dispose();
+                modifierTimer.Dispose();
                 if (tray != null) tray.Dispose();
             }
             base.Dispose(disposing);
@@ -216,7 +232,7 @@ namespace WinDeck
             }
             ClampToScreen();
             RefreshKeys();
-            RegisterHotkey();
+            RegisterHotkeys();
         }
 
         void DoLayoutPanel()
@@ -391,8 +407,7 @@ namespace WinDeck
             if (name == null) return;
             cfg.Pages.Add(DeckPage.CreateEmpty(name));
             cfg.CurrentPage = cfg.Pages.Count - 1;
-            SaveConfig();
-            RefreshKeys();
+            ConfigChanged();
         }
 
         void RenamePage()
@@ -400,8 +415,7 @@ namespace WinDeck
             string name = AskText("페이지 이름 변경", "페이지 이름", CurrentPage.Name);
             if (name == null) return;
             CurrentPage.Name = name;
-            SaveConfig();
-            RefreshKeys();
+            ConfigChanged();
         }
 
         string AskText(string title, string prompt, string initial)
@@ -427,20 +441,26 @@ namespace WinDeck
 
         void Execute(DeckKey k)
         {
-            DeckButton b = k.Data;
+            RunButton(k.Data, k);
+        }
+
+        /// <summary>버튼 동작 실행. flashKey 가 있으면 성공/실패를 테두리 색으로 보여준다.</summary>
+        void RunButton(DeckButton b, DeckKey flashKey)
+        {
             try
             {
                 ActionRunner.Run(b, this);
-                k.Flash(Theme.Success);
+                if (flashKey != null) flashKey.Flash(Theme.Success);
+                if (b.Action == ActionTypes.Page && !Visible) RevealPanel();
             }
             catch (ActionException ex)
             {
-                k.Flash(Theme.Error);
+                if (flashKey != null) flashKey.Flash(Theme.Error);
                 ShowWarning(ex.Message);
             }
             catch (Exception ex)
             {
-                k.Flash(Theme.Error);
+                if (flashKey != null) flashKey.Flash(Theme.Error);
                 ErrorLog.Write(ex);
                 ShowWarning("실행 중 오류가 발생했습니다.\n" + ex.Message);
             }
@@ -453,12 +473,11 @@ namespace WinDeck
             try
             {
                 DeckPage page = CurrentPage;
-                using (var f = new ButtonEditForm(page.Buttons[index].Clone(), cfg))
+                using (var f = new ButtonEditForm(page.Buttons[index].Clone(), cfg, cfg.Pages.IndexOf(page), index))
                 {
                     if (f.ShowDialog(this) != DialogResult.OK) return;
                     page.Buttons[index] = f.Result;
-                    SaveConfig();
-                    RefreshKeys();
+                    ConfigChanged();
                     keys[index].Flash(Theme.Accent);
                 }
             }
@@ -523,9 +542,10 @@ namespace WinDeck
         {
             if (k == null || copiedButton == null) return;
             if (!ConfirmReplace(k.Data, "붙여넣은 버튼")) return;
-            CurrentPage.Buttons[k.Index] = copiedButton.Clone();
-            SaveConfig();
-            RefreshKeys();
+            DeckButton pasted = copiedButton.Clone();
+            pasted.Hotkey = ""; // 같은 단축키가 두 버튼에 걸리지 않도록 복사본에는 단축키를 넣지 않는다
+            CurrentPage.Buttons[k.Index] = pasted;
+            ConfigChanged();
             k.Flash(Theme.Accent);
         }
 
@@ -536,8 +556,7 @@ namespace WinDeck
             if (MessageBox.Show(this, name + " 버튼을 비울까요?", "WinDeck", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 return;
             CurrentPage.Buttons[k.Index] = new DeckButton();
-            SaveConfig();
-            RefreshKeys();
+            ConfigChanged();
         }
 
         bool ConfirmReplace(DeckButton existing, string what)
@@ -571,8 +590,7 @@ namespace WinDeck
             {
                 if (!ConfirmReplace(k.Data, "'" + b.Title + "'")) return;
                 CurrentPage.Buttons[k.Index] = b;
-                SaveConfig();
-                RefreshKeys();
+                ConfigChanged();
                 k.Flash(Theme.Accent);
             }));
         }
@@ -647,19 +665,30 @@ namespace WinDeck
                         Detail = "우클릭: 메뉴"
                     };
                 string title = string.IsNullOrWhiteSpace(b.Title) ? ActionTypes.DisplayName(b.Action) : b.Title;
-                return new TipContent { Title = title, Body = b.Description, Detail = ActionDetail(b) };
+                string detail = ActionDetail(b);
+                if (!string.IsNullOrWhiteSpace(b.Hotkey)) detail += "\n바로 실행 단축키 · " + b.Hotkey;
+                return new TipContent { Title = title, Body = b.Description, Detail = detail };
             }
             var gb = c as GlyphButton;
             if (gb != null)
             {
                 if (gb == btnHide) return new TipContent { Title = gb.TipTitle, Detail = "다시 열기: " + HotkeyText + " 또는 트레이 아이콘" };
-                if (gb == btnPrev || gb == btnNext) return new TipContent { Title = gb.TipTitle, Detail = "패널 위에서 마우스 휠로도 넘길 수 있습니다." };
+                if (gb == btnPrev || gb == btnNext)
+                {
+                    string key = gb == btnPrev ? cfg.PrevPageHotkey : cfg.NextPageHotkey;
+                    return new TipContent
+                    {
+                        Title = gb.TipTitle,
+                        Detail = (string.IsNullOrWhiteSpace(key) ? "" : "단축키 · " + key + "\n") + "패널 위에서 마우스 휠로도 넘길 수 있습니다."
+                    };
+                }
                 return new TipContent { Title = gb.TipTitle };
             }
             if (c == this)
                 return new TipContent
                 {
                     Title = CurrentPage.Name,
+                    Body = string.IsNullOrWhiteSpace(CurrentPage.Hotkey) ? null : "이 페이지 바로가기 · " + CurrentPage.Hotkey,
                     Detail = "끌어서 이동 · 휠: 페이지 넘기기 · 우클릭: 메뉴"
                 };
             return null;
@@ -758,9 +787,83 @@ namespace WinDeck
 
         public void ShowPanel()
         {
+            ShowPanel(false);
+        }
+
+        /// <summary>atCursor: 마우스 커서 아래에 표시, 아니면 저장된 위치에 표시.</summary>
+        public void ShowPanel(bool atCursor)
+        {
+            if (atCursor) MoveNearCursor();
+            else if (!Visible && cfg.HasPosition) Location = new Point(cfg.WindowX, cfg.WindowY);
+            ClampToScreen();
             if (!Visible) Show();
             Native.SetWindowPos(Handle, cfg.TopMost ? Native.HWND_TOPMOST : Native.HWND_TOP, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+        }
+
+        /// <summary>상단 막대가 커서 바로 아래 오도록 가운데 맞춤 (화면 밖으로 나가지 않게).</summary>
+        void MoveNearCursor()
+        {
+            Point c = Cursor.Position;
+            Rectangle wa = Screen.FromPoint(c).WorkingArea;
+            int x = c.X - Width / 2;
+            int y = c.Y - S(20);
+            x = Math.Max(wa.Left, Math.Min(x, wa.Right - Width));
+            y = Math.Max(wa.Top, Math.Min(y, wa.Bottom - Height));
+            Location = new Point(x, y);
+        }
+
+        void RevealPanel()
+        {
+            if (!Visible) ShowPanel(cfg.ShowAtCursor);
+        }
+
+        /// <summary>전역 단축키가 눌렸을 때.</summary>
+        public void OnHotkey(HotkeyEntry entry)
+        {
+            // Alt·Win 을 누른 채로 단축키를 쓰면, 키를 뗄 때 앞 창의 메뉴나 시작 메뉴가 열린다. 빈 키 입력으로 막는다.
+            if (InputSender.AltOrWinDown()) InputSender.SendMaskKey();
+            switch (entry.Kind)
+            {
+                case HotkeyKind.TogglePanel:
+                    if (Visible) HidePanel();
+                    else ShowPanel(cfg.ShowAtCursor);
+                    break;
+                case HotkeyKind.PrevPage:
+                    ChangePage(-1);
+                    RevealPanel();
+                    break;
+                case HotkeyKind.NextPage:
+                    ChangePage(1);
+                    RevealPanel();
+                    break;
+                case HotkeyKind.Page:
+                    if (entry.PageIndex >= 0 && entry.PageIndex < cfg.Pages.Count && entry.PageIndex != cfg.CurrentPage)
+                    {
+                        cfg.CurrentPage = entry.PageIndex;
+                        SaveConfig();
+                        RefreshKeys();
+                    }
+                    RevealPanel();
+                    break;
+                case HotkeyKind.Button:
+                    pendingPage = entry.PageIndex;
+                    pendingButton = entry.ButtonIndex;
+                    pendingDeadline = DateTime.Now.AddMilliseconds(1500);
+                    modifierTimer.Stop();
+                    modifierTimer.Start();
+                    break;
+            }
+        }
+
+        void RunPendingButton()
+        {
+            int p = pendingPage, b = pendingButton;
+            pendingPage = -1;
+            if (p < 0 || p >= cfg.Pages.Count || b < 0 || b >= cfg.Pages[p].Buttons.Count) return;
+            DeckButton button = cfg.Pages[p].Buttons[b];
+            if (button.IsEmpty || button.Action == ActionTypes.None) return;
+            RunButton(button, Visible && p == cfg.CurrentPage ? keys[b] : null);
         }
 
         public void HidePanel()
@@ -774,18 +877,48 @@ namespace WinDeck
             }
         }
 
-        void RegisterHotkey()
+        /// <summary>설정의 모든 전역 단축키를 다시 등록한다. 등록 실패 목록이 바뀌었을 때만 알린다.</summary>
+        void RegisterHotkeys()
         {
             if (!systemHooks || !IsHandleCreated) return;
-            Native.UnregisterHotKey(Handle, HotkeyId);
-            if (string.IsNullOrWhiteSpace(cfg.Hotkey)) return;
-            KeyCombo combo;
-            if (!KeyCombo.TryParse(cfg.Hotkey, out combo)) return;
-            if (!Native.RegisterHotKey(Handle, HotkeyId, combo.HotkeyModifiers | Native.MOD_NOREPEAT, combo.Key) && tray != null)
+            UnregisterHotkeys();
+            var failed = new List<string>();
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int id = HotkeyIdBase;
+            foreach (HotkeyEntry entry in HotkeyMap.Collect(cfg))
             {
-                tray.ShowBalloonTip(6000, "단축키를 등록하지 못했습니다",
-                    cfg.Hotkey + " 를 다른 프로그램이 사용 중일 수 있습니다. 설정에서 다른 단축키를 지정하세요.", ToolTipIcon.Warning);
+                KeyCombo combo;
+                if (!KeyCombo.TryParse(entry.Combo, out combo)) continue;
+                if (!used.Add(entry.Combo))
+                {
+                    failed.Add(entry.Combo + " — " + entry.Label + " (다른 항목과 겹침)");
+                    continue;
+                }
+                if (Native.RegisterHotKey(Handle, id, combo.HotkeyModifiers | Native.MOD_NOREPEAT, combo.Key))
+                    hotkeys[id++] = entry;
+                else
+                    failed.Add(entry.Combo + " — " + entry.Label);
             }
+            string failure = string.Join("\n", failed.ToArray());
+            if (failure.Length > 0 && failure != lastHotkeyFailure && tray != null)
+            {
+                string text = failure + "\n다른 프로그램이 쓰고 있을 수 있습니다. 설정에서 바꿔 주세요.";
+                tray.ShowBalloonTip(8000, "일부 단축키를 등록하지 못했습니다", text.Length > 250 ? text.Substring(0, 249) + "…" : text, ToolTipIcon.Warning);
+            }
+            lastHotkeyFailure = failure;
+        }
+
+        void UnregisterHotkeys()
+        {
+            if (IsHandleCreated)
+                foreach (int id in hotkeys.Keys) Native.UnregisterHotKey(Handle, id);
+            hotkeys.Clear();
+        }
+
+        /// <summary>현재 등록된 단축키 (점검용).</summary>
+        public List<HotkeyEntry> RegisteredHotkeys
+        {
+            get { return new List<HotkeyEntry>(hotkeys.Values); }
         }
 
         // ------------------------------------------------------------------ tray
@@ -846,13 +979,7 @@ namespace WinDeck
         public void ExitApp()
         {
             exiting = true;
-            try
-            {
-                cfg.WindowX = Left;
-                cfg.WindowY = Top;
-                cfg.HasPosition = true;
-                ConfigStore.Save(cfg);
-            }
+            try { ConfigStore.Save(cfg); }
             catch (Exception) { }
             if (tray != null) tray.Visible = false;
             Close();
@@ -869,11 +996,7 @@ namespace WinDeck
                 using (var f = new SettingsForm(ConfigStore.Clone(cfg), AutoStart.IsEnabled()))
                 {
                     if (f.ShowDialog(this) != DialogResult.OK) return;
-                    AppConfig n = f.Result;
-                    n.HasPosition = true;
-                    n.WindowX = Left;
-                    n.WindowY = Top;
-                    cfg = n;
+                    cfg = f.Result;
                     try
                     {
                         if (f.AutoStartEnabled != AutoStart.IsEnabled()) AutoStart.Set(f.AutoStartEnabled);
@@ -908,9 +1031,9 @@ namespace WinDeck
             {
                 AppConfig n = BackupUi.Import(this, cfg);
                 if (n == null) return;
-                n.HasPosition = true;
-                n.WindowX = Left;
-                n.WindowY = Top;
+                n.HasPosition = cfg.HasPosition;
+                n.WindowX = cfg.WindowX;
+                n.WindowY = cfg.WindowY;
                 cfg = n;
                 SaveConfig();
                 ApplyConfig(false);
@@ -920,6 +1043,14 @@ namespace WinDeck
             {
                 dialogOpen = false;
             }
+        }
+
+        /// <summary>버튼·페이지 구성이 바뀐 뒤: 저장, 화면 갱신, 단축키 재등록.</summary>
+        void ConfigChanged()
+        {
+            SaveConfig();
+            RefreshKeys();
+            RegisterHotkeys();
         }
 
         void SaveConfig()

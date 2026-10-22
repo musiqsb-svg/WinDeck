@@ -22,6 +22,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Icon generation failed.' }
 
 # 2) Compile WinDeck.exe (close a running copy of dist\WinDeck.exe first, restart it afterwards)
 $sources = Get-ChildItem (Join-Path $root 'src') -Filter *.cs | ForEach-Object { $_.FullName }
+# Built-in icon library (assets\icons\*.png + manifest.tsv) is embedded as WinDeck.Icons.* resources
+$resources = @()
+$iconDir = Join-Path $root 'assets\icons'
+if (Test-Path (Join-Path $iconDir 'manifest.tsv')) {
+    $resources += "/resource:$(Join-Path $iconDir 'manifest.tsv'),WinDeck.Icons.manifest.tsv"
+    Get-ChildItem $iconDir -Filter *.png | ForEach-Object { $resources += "/resource:$($_.FullName),WinDeck.Icons.$($_.Name)" }
+}
 $exe = Join-Path $dist 'WinDeck.exe'
 $running = @(Get-Process WinDeck -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
 if ($running.Count -gt 0) {
@@ -32,7 +39,7 @@ if ($running.Count -gt 0) {
 & $csc /nologo /codepage:65001 /target:winexe /optimize+ /platform:anycpu `
     "/out:$exe" "/win32icon:$ico" "/win32manifest:$(Join-Path $root 'app.manifest')" `
     /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
-    $sources
+    $resources $sources
 $compileExit = $LASTEXITCODE
 if ($running.Count -gt 0) { Start-Process $exe }
 if ($compileExit -ne 0) { throw 'WinDeck compile failed.' }

@@ -5,5 +5,5 @@ using System.Reflection;
 [assembly: AssemblyDescription("윈도우용 소프트웨어 스트림덱")]
 [assembly: AssemblyProduct("WinDeck")]
 [assembly: AssemblyCopyright("Copyright © 2026 hopenesttt-prog (MIT License)")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]

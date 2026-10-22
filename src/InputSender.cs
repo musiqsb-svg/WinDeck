@@ -59,6 +59,33 @@ namespace WinDeck
             Send(list);
         }
 
+        static bool IsDown(int vk)
+        {
+            return (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
+        }
+
+        /// <summary>Ctrl·Shift·Alt·Win 중 하나라도 눌려 있는지.</summary>
+        public static bool ModifiersDown()
+        {
+            return IsDown(VK_SHIFT) || IsDown(VK_CONTROL) || IsDown(VK_MENU) || IsDown(VK_LWIN) || IsDown(0x5C);
+        }
+
+        public static bool AltOrWinDown()
+        {
+            return IsDown(VK_MENU) || IsDown(VK_LWIN) || IsDown(0x5C);
+        }
+
+        /// <summary>
+        /// 아무 기능 없는 키(0xE8)를 한 번 보낸다. Alt·Win 만 눌렀다 뗀 것으로 보이지 않게 해서
+        /// 앞 창의 메뉴 표시줄이나 시작 메뉴가 열리는 것을 막는다.
+        /// </summary>
+        public static void SendMaskKey()
+        {
+            var list = new List<Native.INPUT>();
+            AddPress(list, 0xE8);
+            Send(list);
+        }
+
         public static void SendSequence(IList<KeyCombo> sequence)
         {
             for (int i = 0; i < sequence.Count; i++)

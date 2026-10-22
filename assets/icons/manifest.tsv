@@ -1,0 +1,91 @@
+# name	한글 이름	분류	스타일   — WinDeck 기본 아이콘 (Codex 이미지 생성, 128px PNG). 플랫(2D) 세트는 이름 끝이 -2d
+folder	폴더	파일	입체
+downloads	다운로드	파일	입체
+document	문서	파일	입체
+picture	사진	파일	입체
+music	음악	파일	입체
+video	동영상	파일	입체
+trash	휴지통	파일	입체
+cloud	클라우드	파일	입체
+globe	웹사이트	인터넷·소통	입체
+search	검색	인터넷·소통	입체
+mail	메일	인터넷·소통	입체
+chat	메신저	인터넷·소통	입체
+phone	전화	인터넷·소통	입체
+videocall	화상 회의	인터넷·소통	입체
+calendar	일정	인터넷·소통	입체
+bell	알림	인터넷·소통	입체
+memo	메모	업무	입체
+clipboard	클립보드	업무	입체
+checklist	할 일	업무	입체
+chart	보고서	업무	입체
+calculator	계산기	업무	입체
+printer	프린터	업무	입체
+briefcase	업무	업무	입체
+code	코드	업무	입체
+terminal	터미널	업무	입체
+lightbulb	아이디어	업무	입체
+play	재생	미디어	입체
+next	다음 곡	미디어	입체
+volume	볼륨	미디어	입체
+mute	음소거	미디어	입체
+microphone	마이크	미디어	입체
+camera	화면 캡처	미디어	입체
+settings	설정	시스템	입체
+lock	잠금	시스템	입체
+monitor	바탕화면	시스템	입체
+power	전원	시스템	입체
+home	홈	시스템	입체
+rocket	실행	시스템	입체
+star	즐겨찾기	기타	입체
+heart	하트	기타	입체
+wave	인사	기타	입체
+thumbsup	좋아요	기타	입체
+check	완료	기타	입체
+warning	주의	기타	입체
+coffee	휴식	기타	입체
+folder-2d	폴더	파일	플랫
+downloads-2d	다운로드	파일	플랫
+document-2d	문서	파일	플랫
+picture-2d	사진	파일	플랫
+music-2d	음악	파일	플랫
+video-2d	동영상	파일	플랫
+trash-2d	휴지통	파일	플랫
+cloud-2d	클라우드	파일	플랫
+globe-2d	웹사이트	인터넷·소통	플랫
+search-2d	검색	인터넷·소통	플랫
+mail-2d	메일	인터넷·소통	플랫
+chat-2d	메신저	인터넷·소통	플랫
+phone-2d	전화	인터넷·소통	플랫
+videocall-2d	화상 회의	인터넷·소통	플랫
+calendar-2d	일정	인터넷·소통	플랫
+bell-2d	알림	인터넷·소통	플랫
+memo-2d	메모	업무	플랫
+clipboard-2d	클립보드	업무	플랫
+checklist-2d	할 일	업무	플랫
+chart-2d	보고서	업무	플랫
+calculator-2d	계산기	업무	플랫
+printer-2d	프린터	업무	플랫
+briefcase-2d	업무	업무	플랫
+code-2d	코드	업무	플랫
+terminal-2d	터미널	업무	플랫
+lightbulb-2d	아이디어	업무	플랫
+play-2d	재생	미디어	플랫
+next-2d	다음 곡	미디어	플랫
+volume-2d	볼륨	미디어	플랫
+mute-2d	음소거	미디어	플랫
+microphone-2d	마이크	미디어	플랫
+camera-2d	화면 캡처	미디어	플랫
+settings-2d	설정	시스템	플랫
+lock-2d	잠금	시스템	플랫
+monitor-2d	바탕화면	시스템	플랫
+power-2d	전원	시스템	플랫
+home-2d	홈	시스템	플랫
+rocket-2d	실행	시스템	플랫
+star-2d	즐겨찾기	기타	플랫
+heart-2d	하트	기타	플랫
+wave-2d	인사	기타	플랫
+thumbsup-2d	좋아요	기타	플랫
+check-2d	완료	기타	플랫
+warning-2d	주의	기타	플랫
+coffee-2d	휴식	기타	플랫

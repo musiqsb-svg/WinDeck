@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -69,7 +70,10 @@ static class SmokeTest
         TestConfig();
         TestDistribution();
         TestKeyCombo();
+        TestHotkeys();
+        TestIconLibrary();
         TestRender();
+        TestHotkeyDispatch();
         if (args.Contains("--input")) TestInput();
         if (args.Contains("--e2e")) TestEndToEnd();
 
@@ -174,6 +178,103 @@ static class SmokeTest
         }
     }
 
+    // ------------------------------------------------------------------ hotkeys (model / validation)
+
+    static void TestHotkeys()
+    {
+        AppConfig c = AppConfig.CreateDefault();
+        Check(c.PrevPageHotkey == "Ctrl+Alt+Left" && c.NextPageHotkey == "Ctrl+Alt+Right" && !c.ShowAtCursor, "default page hotkeys, cursor mode off");
+        List<HotkeyEntry> entries = HotkeyMap.Collect(c);
+        Check(entries.Count == 3 && entries[0].Kind == HotkeyKind.TogglePanel, "default config has 3 global hotkeys", entries.Count.ToString());
+
+        AppConfig old = ConfigStore.Parse("{\"Hotkey\":\"Ctrl+`\",\"Pages\":[{\"Name\":\"A\",\"Buttons\":[{\"Title\":\"x\",\"Action\":\"url\",\"Target\":\"a.com\"}]}]}");
+        Check(old.PrevPageHotkey == AppConfig.DefaultPrevPageHotkey && old.Pages[0].Hotkey == "" && old.Pages[0].Buttons[0].Hotkey == "" && !old.ShowAtCursor,
+            "1.0 config without hotkey fields loads with defaults");
+
+        c.Pages[1].Hotkey = "ctrl+alt+2";
+        c.Pages[0].Buttons[4].Hotkey = "Ctrl+Alt+H";
+        entries = HotkeyMap.Collect(c);
+        Check(entries.Any(e => e.Kind == HotkeyKind.Page && e.PageIndex == 1 && e.Combo == "Ctrl+Alt+2"), "page hotkey collected and normalized");
+        Check(entries.Any(e => e.Kind == HotkeyKind.Button && e.PageIndex == 0 && e.ButtonIndex == 4 && e.Label.Contains("인사말")), "button hotkey collected with label");
+        Check(HotkeyMap.Validate(c, "Ctrl+Alt+2", HotkeyKind.Button, 0, 0) != null, "conflict with a page hotkey detected");
+        Check(HotkeyMap.Validate(c, "Ctrl+Alt+H", HotkeyKind.Button, 0, 4) == null, "a button's own hotkey is not a conflict");
+        Check(HotkeyMap.Validate(c, "ctrl+alt+left", HotkeyKind.Page, 0, -1) != null, "conflict with prev-page hotkey detected (case-insensitive)");
+        Check(HotkeyMap.Validate(c, "Q", HotkeyKind.Button, 0, 0) != null, "single letter hotkey rejected");
+        Check(HotkeyMap.Validate(c, "F9", HotkeyKind.Button, 0, 0) == null, "lone F-key allowed");
+        Check(HotkeyMap.Validate(c, "Ctrl+A, Ctrl+C", HotkeyKind.Button, 0, 0) != null, "key sequence rejected as global hotkey");
+        Check(HotkeyMap.Validate(c, "", HotkeyKind.Button, 0, 0) == null, "empty hotkey means none");
+
+        AppConfig rt = ConfigStore.Parse(ConfigStore.ToJson(c));
+        Check(rt.Pages[1].Hotkey == "ctrl+alt+2" && rt.Pages[0].Buttons[4].Hotkey == "Ctrl+Alt+H", "hotkeys survive save/load");
+    }
+
+    static void TestHotkeyDispatch()
+    {
+        AppConfig c = AppConfig.CreateDefault();
+        c.Pages.Add(DeckPage.CreateEmpty("세번째"));
+        c.HasPosition = true;
+        c.WindowX = 60;
+        c.WindowY = 60;
+        var deck = new DeckForm(c, false);
+        deck.Show();
+        Pump(200);
+        Point oldCursor = Cursor.Position;
+        try
+        {
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.NextPage });
+            Check(deck.Config.CurrentPage == 1, "next-page hotkey");
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.PrevPage });
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.PrevPage });
+            Check(deck.Config.CurrentPage == 2, "prev-page hotkey wraps around");
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.Page, PageIndex = 0 });
+            Check(deck.Config.CurrentPage == 0, "page shortcut jumps to that page");
+
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.TogglePanel });
+            Check(!deck.Visible, "toggle hotkey hides the panel");
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.NextPage });
+            Check(deck.Visible && deck.Location == new Point(60, 60) && deck.Config.CurrentPage == 1,
+                "page hotkey reveals the hidden panel at its saved position", deck.Location.ToString());
+
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            Cursor.Position = new Point(wa.Left + wa.Width / 2, wa.Top + wa.Height / 2);
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.TogglePanel });
+            deck.Config.ShowAtCursor = true;
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.TogglePanel });
+            Point cur = Cursor.Position;
+            Check(deck.Visible && Math.Abs(deck.Left + deck.Width / 2 - cur.X) <= 2 && cur.Y > deck.Top && cur.Y < deck.Top + deck.Height / 3,
+                "cursor mode opens the panel under the mouse", deck.Bounds + " cursor " + cur);
+
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.TogglePanel });
+            deck.Config.ShowAtCursor = false;
+            deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.TogglePanel });
+            Check(deck.Visible && deck.Location == new Point(60, 60), "cursor mode off returns to the saved position", deck.Location.ToString());
+            Check(deck.Config.WindowX == 60 && deck.Config.WindowY == 60, "showing at the cursor does not overwrite the saved position");
+        }
+        finally
+        {
+            Cursor.Position = oldCursor;
+            deck.Close();
+            deck.Dispose();
+        }
+    }
+
+    static void TestIconLibrary()
+    {
+        int expected = File.ReadAllLines(Path.Combine(RepoRoot, "assets", "icons", "manifest.tsv"))
+            .Count(l => l.Trim().Length > 0 && !l.StartsWith("#"));
+        List<IconAsset> icons = IconLibrary.All;
+        Check(icons.Count == expected, "all manifest icons are embedded in the exe", icons.Count + "/" + expected);
+        Check(icons.All(i => i.Image.Width == IconCache.StoredIconSize && i.Image.Height == IconCache.StoredIconSize), "embedded icons are 128px");
+        Check(icons.Select(i => i.Name).Distinct().Count() == icons.Count, "icon names are unique");
+        IconAsset folder = IconLibrary.Find("folder");
+        Check(folder != null && IconCache.FromData(folder.Base64) != null, "library icon converts to button IconData");
+    }
+
+    static string RepoRoot
+    {
+        get { return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "..", "..")); }
+    }
+
     // ------------------------------------------------------------------ key combos
 
     static void TestKeyCombo()
@@ -270,14 +371,31 @@ static class SmokeTest
         RenderEditor(cfg, 7, "edit_run.png");
         RenderEditor(cfg, 0, "edit_folder.png");
 
-        var s = new SettingsForm(ConfigStore.Clone(cfg), false);
-        s.StartPosition = FormStartPosition.Manual;
-        s.Location = new Point(-6000, 0);
-        s.Show();
-        Pump(300);
-        Save(s, "settings.png");
-        s.Close();
-        s.Dispose();
+        AppConfig withKeys = ConfigStore.Clone(cfg);
+        withKeys.Pages[1].Hotkey = "Ctrl+Alt+2";
+        withKeys.Pages[0].Buttons[4].Hotkey = "Ctrl+Alt+H";
+        for (int tab = 0; tab < 4; tab++)
+        {
+            var s = new SettingsForm(ConfigStore.Clone(withKeys), false);
+            s.InitialTab = tab;
+            s.StartPosition = FormStartPosition.Manual;
+            s.Location = new Point(-6000, 0);
+            s.Show();
+            Pump(300);
+            Save(s, tab == 0 ? "settings.png" : "settings_tab" + tab + ".png");
+            s.Close();
+            s.Dispose();
+        }
+        RenderEditor(withKeys, 4, "edit_text_hotkey.png");
+
+        var picker = new IconPickerForm(Theme.ParseColor("#0063B1", Theme.KeyBack));
+        picker.StartPosition = FormStartPosition.Manual;
+        picker.Location = new Point(-6000, 0);
+        picker.Show();
+        Pump(400);
+        Save(picker, "icon_picker.png");
+        picker.Close();
+        picker.Dispose();
         Pump(100);
         if (fgBefore != IntPtr.Zero) SetForegroundWindow(fgBefore);
     }
@@ -490,6 +608,16 @@ static class SmokeTest
                 DropOnKey(deck, 1, new DataObject(DataFormats.UnicodeText, "https://www.naver.com/news"));
                 dropped = deck.Config.Pages[1].Buttons[1];
                 Check(dropped.Action == ActionTypes.Url && dropped.Title == "naver.com", "dropping a link creates a link button", dropped.Action + " " + dropped.Title);
+
+                // 버튼 단축키: 다른 페이지(0)에 있는 문장 버튼이 패널을 건드리지 않고 앞 창에 입력되는지
+                if (ReadState(state).StartsWith("FG"))
+                {
+                    deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.Button, PageIndex = 0, ButtonIndex = 0 });
+                    Pump(900);
+                    string s = ReadState(state);
+                    Check(s == "FG|교체됨+붙여넣기\r\n클릭 입력 OK", "button hotkey types into the focused app", s);
+                    Check(deck.Config.CurrentPage == 1, "button hotkey does not switch the visible page");
+                }
             }
         }
         finally

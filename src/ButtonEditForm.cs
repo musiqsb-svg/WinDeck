@@ -35,11 +35,12 @@ namespace WinDeck
 
         readonly AppConfig cfg;
         readonly DeckButton original;
+        readonly int pageIndex, buttonIndex;
         string iconData, backColor, foreColor;
 
         TextBox txtTitle, txtDesc, txtFolder, txtUrl, txtText, txtRun, txtArgs;
-        KeyCaptureBox txtHotkey;
-        Button btnRecord, btnTest, btnOk, btnCancel, btnIcon, btnIconClear, btnBackCustom, btnFore, btnForeAuto;
+        KeyCaptureBox txtHotkey, txtKeyHotkey;
+        Button btnRecord, btnKeyRecord, btnLibrary, btnTest, btnOk, btnCancel, btnIcon, btnIconClear, btnBackCustom, btnFore, btnForeAuto;
         ComboBox cboAction, cboPreset, cboPage;
         CheckBox chkEnter, chkPaste;
         readonly Dictionary<string, Panel> panels = new Dictionary<string, Panel>();
@@ -49,9 +50,14 @@ namespace WinDeck
 
         public DeckButton Result { get; private set; }
 
-        public ButtonEditForm(DeckButton button, AppConfig cfg)
+        public ButtonEditForm(DeckButton button, AppConfig cfg) : this(button, cfg, -1, -1) { }
+
+        /// <param name="pageIndex">편집 중인 버튼의 페이지 위치 (단축키 겹침 검사에서 자기 자신을 빼기 위함)</param>
+        public ButtonEditForm(DeckButton button, AppConfig cfg, int pageIndex, int buttonIndex)
         {
             this.cfg = cfg;
+            this.pageIndex = pageIndex;
+            this.buttonIndex = buttonIndex;
             original = button ?? new DeckButton();
             iconData = original.IconData;
             backColor = original.BackColor;
@@ -96,8 +102,11 @@ namespace WinDeck
             Controls.Add(new Label { Text = "모양", AutoSize = true, Location = new Point(16, 352), Font = new Font(Theme.UiFontName, 9f, FontStyle.Bold) });
 
             AddLabel(this, "아이콘", 16, 385);
-            btnIcon = new Button { Text = "이미지 선택…", Location = new Point(120, 380), Size = new Size(120, 28) };
-            btnIconClear = new Button { Text = "기본 아이콘", Location = new Point(246, 380), Size = new Size(110, 28) };
+            btnLibrary = new Button { Text = "아이콘 모음…", Location = new Point(120, 380), Size = new Size(110, 28) };
+            btnIcon = new Button { Text = "내 이미지…", Location = new Point(234, 380), Size = new Size(110, 28) };
+            btnIconClear = new Button { Text = "기본 아이콘", Location = new Point(348, 380), Size = new Size(102, 28) };
+            Controls.Add(btnLibrary);
+            tips.SetToolTip(btnLibrary, "WinDeck 에 들어 있는 아이콘 중에서 고릅니다.");
             Controls.Add(btnIcon);
             Controls.Add(btnIconClear);
             tips.SetToolTip(btnIcon, "PNG·JPG·ICO 이미지나 프로그램(.exe)의 아이콘을 버튼에 표시합니다.");
@@ -149,6 +158,22 @@ namespace WinDeck
 
             Controls.Add(new Label { Text = "미리보기", AutoSize = true, Location = new Point(474, 19) });
             preview = new KeyPreview { Location = new Point(474, 42), Size = new Size(136, 136) };
+
+            Controls.Add(new Label { Text = "바로 실행 단축키", AutoSize = true, Location = new Point(474, 194) });
+            txtKeyHotkey = new KeyCaptureBox { Location = new Point(474, 216), Size = new Size(136, 23) };
+            btnKeyRecord = new Button { Text = "단축키 바꾸기", Location = new Point(474, 244), Size = new Size(136, 26) };
+            btnKeyRecord.Click += delegate { if (txtKeyHotkey.Capturing) txtKeyHotkey.EndCapture(); else txtKeyHotkey.BeginCapture(); };
+            txtKeyHotkey.CaptureChanged += delegate { btnKeyRecord.Text = txtKeyHotkey.Capturing ? "새 키를 누르세요" : "단축키 바꾸기"; };
+            Controls.Add(txtKeyHotkey);
+            Controls.Add(btnKeyRecord);
+            Controls.Add(new Label
+            {
+                Text = "패널을 열지 않아도\n이 키로 바로 실행됩니다.\n(비우면 없음)",
+                AutoSize = true,
+                Location = new Point(474, 276),
+                ForeColor = SystemColors.GrayText
+            });
+            tips.SetToolTip(txtKeyHotkey, "예: Ctrl+Alt+1 — 어느 프로그램에서든 이 키를 누르면 버튼이 실행됩니다.");
             Controls.Add(preview);
 
             // events
@@ -156,6 +181,7 @@ namespace WinDeck
             cboAction.SelectedIndexChanged += delegate { ShowActionPanel(); UpdatePreview(); };
             txtRun.TextChanged += delegate { UpdatePreview(); };
             btnIcon.Click += delegate { PickIcon(); };
+            btnLibrary.Click += delegate { PickFromLibrary(); };
             btnIconClear.Click += delegate { iconData = ""; UpdateAppearance(); };
             btnBackCustom.Click += delegate { string c = PickColor(backColor, Theme.KeyBack); if (c != null) { backColor = c; UpdateAppearance(); } };
             btnFore.Click += delegate { string c = PickColor(foreColor, Color.White); if (c != null) { foreColor = c; UpdateAppearance(); } };
@@ -272,6 +298,7 @@ namespace WinDeck
         {
             txtTitle.Text = original.Title;
             txtDesc.Text = original.Description;
+            txtKeyHotkey.Text = original.Hotkey ?? "";
             int idx = Array.IndexOf(ActionTypes.All, original.Action);
             string target = original.Target ?? "";
             switch (original.Action)
@@ -403,6 +430,14 @@ namespace WinDeck
             cboPreset.SelectedIndex = 0;
         }
 
+        void PickFromLibrary()
+        {
+            string data = IconPickerForm.Pick(this, Theme.ParseColor(backColor, Theme.KeyBack));
+            if (data == null) return;
+            iconData = data;
+            UpdateAppearance();
+        }
+
         void PickIcon()
         {
             using (var ofd = new OpenFileDialog())
@@ -495,6 +530,14 @@ namespace WinDeck
                     return;
             }
             if (b.Action == ActionTypes.Hotkey) b.Target = KeyCombo.NormalizeSequence(b.Target);
+            string keyError = HotkeyMap.Validate(cfg, txtKeyHotkey.Text.Trim(), HotkeyKind.Button, pageIndex, buttonIndex);
+            if (keyError != null)
+            {
+                txtKeyHotkey.Focus();
+                MessageBox.Show(this, "[바로 실행 단축키] " + keyError, "버튼 편집", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            b.Hotkey = HotkeyMap.Normalize(txtKeyHotkey.Text) ?? "";
             Result = b;
             DialogResult = DialogResult.OK;
             Close();
