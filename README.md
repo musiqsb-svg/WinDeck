@@ -7,7 +7,7 @@
 ## 다운로드
 
 > [!WARNING]
-> **Microsoft Edge로는 설치되지 않습니다 (1.0.0 기준).**
+> **Microsoft Edge로는 설치되지 않습니다 (현재 버전 기준).**
 > Chrome, 네이버 웨일, Firefox 등 다른 브라우저로 내려받으세요.
 
 **[최신 버전 받기 (Releases)](../../releases/latest)**
@@ -18,7 +18,20 @@
 | `WinDeck-Portable-x.y.z.zip` | 포터블판 — 압축 풀고 `WinDeck.exe` 실행, 설정은 같은 폴더에 저장 |
 
 - 요구 사항: Windows 10/11 (기본 내장 .NET Framework 4.8 사용, 추가 설치 없음)
-- 처음 실행 시 "Windows의 PC 보호" 창이 뜨면 [추가 정보] → [실행] (코드 서명 인증서 없음)
+- 처음 실행할 때 "Windows의 PC 보호" 창이 뜨면 → [아래 그림대로](#처음-실행할-때-경고가-뜨면) 두 번만 누르면 됨
+
+### 처음 실행할 때 경고가 뜨면
+
+설치 파일(`WinDeck-Setup-x.y.z.exe`)이나 포터블판의 `WinDeck.exe` 를 처음 열면 **"Windows의 PC 보호"** 창이 나올 수 있습니다.
+WinDeck 에 코드 서명 인증서가 없어서 **"알 수 없는 게시자"** 로 표시되는 것이며, Microsoft Defender 검사에서 위협은 발견되지 않았습니다.
+
+| ① 창 왼쪽의 **추가 정보** 누르기 | ② 앱 이름 확인 후 **실행** 누르기 |
+|---|---|
+| <img src="docs/images/smartscreen-1.png" alt="Windows의 PC 보호 - 추가 정보 누르기" width="380"> | <img src="docs/images/smartscreen-2.png" alt="Windows의 PC 보호 - 실행 누르기" width="380"> |
+
+- ② 화면의 **앱** 이름이 `WinDeck.exe` 또는 `WinDeck-Setup-x.y.z.exe` 인지 확인하고 실행하세요.
+- 한 번 실행하면 같은 파일로는 보통 다시 뜨지 않습니다. 설치판은 설치 파일을 열 때 한 번만 확인하면 됩니다.
+- 회사 PC에서 [실행] 버튼이 없으면 보안 정책으로 막힌 것이니 IT 담당자에게 예외 등록을 요청하세요.
 
 > Elgato Stream Deck과 관련 없는 개인 프로젝트이며, 실물 기기 없이 화면에서 쓰는 프로그램. [MIT 라이선스](LICENSE)로 자유롭게 사용·수정·배포 가능.
 

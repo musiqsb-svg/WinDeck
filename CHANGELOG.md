@@ -11,6 +11,12 @@
 
 처음 실행 시 "Windows의 PC 보호" 창이 뜨면 **[추가 정보] → [실행]**.
 
+| ① **추가 정보** 누르기 | ② 앱 이름 확인 후 **실행** 누르기 |
+|---|---|
+| <img src="https://raw.githubusercontent.com/hopenesttt-prog/WinDeck/main/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/hopenesttt-prog/WinDeck/main/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
+
+코드 서명 인증서가 없어서 "알 수 없는 게시자"로 나오는 안내입니다 (Microsoft Defender 검사 결과 위협 없음).
+
 ### 추가
 - **버튼 수 8·12·16개** (설정 > 일반, 모든 페이지 공통): 가로 4×2 / 4×3 / 4×4, 세로 2×4 / 3×4 / 4×4
   - 줄여도 뒤쪽 버튼은 지우지 않고 숨겨서 보관, 다시 늘리면 제자리. 숨겨진 버튼의 단축키는 쉬고 겹침 검사에는 포함
