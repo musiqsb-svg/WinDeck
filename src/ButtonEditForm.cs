@@ -45,6 +45,8 @@ namespace WinDeck
         CheckBox chkEnter, chkPaste;
         readonly Dictionary<string, Panel> panels = new Dictionary<string, Panel>();
         readonly List<Button> swatchButtons = new List<Button>();
+        readonly List<Button> recentButtons = new List<Button>();
+        TextBox txtBackHex, txtForeHex;
         KeyPreview preview;
         ToolTip tips;
 
@@ -79,7 +81,7 @@ namespace WinDeck
             ShowInTaskbar = false;
             ShowIcon = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(624, 560);
+            ClientSize = new Size(624, 596);
             tips = new ToolTip();
 
             AddLabel(this, "버튼 이름", 16, 19);
@@ -132,9 +134,34 @@ namespace WinDeck
             btnBackCustom = new Button { Text = "직접…", Location = new Point(376, 415), Size = new Size(74, 28) };
             Controls.Add(btnBackCustom);
 
-            AddLabel(this, "글자색", 16, 457);
-            btnFore = new Button { Text = "색 선택…", Location = new Point(120, 452), Size = new Size(120, 28) };
-            btnForeAuto = new Button { Text = "자동", Location = new Point(246, 452), Size = new Size(110, 28) };
+            // 최근 고른 색 (클릭: 배경색, 오른쪽 클릭: 글자색) + 배경색 코드 입력
+            Controls.Add(new Label { Text = "최근 색", AutoSize = true, Location = new Point(16, 453), ForeColor = SystemColors.GrayText });
+            for (int i = 0; i < ColorChooser.MaxRecent; i++)
+            {
+                var rb = new Button { Location = new Point(120 + i * 26, 450), Size = new Size(22, 22), FlatStyle = FlatStyle.Flat, TabStop = false, Visible = false };
+                rb.FlatAppearance.BorderColor = Color.FromArgb(160, 160, 160);
+                rb.MouseUp += (sender, e) =>
+                {
+                    string hex = (string)((Button)sender).Tag;
+                    if (e.Button == MouseButtons.Right) foreColor = hex;
+                    else if (e.Button == MouseButtons.Left) backColor = hex;
+                    else return;
+                    ColorChooser.AddRecent(cfg, hex);
+                    UpdateAppearance();
+                };
+                recentButtons.Add(rb);
+                Controls.Add(rb);
+            }
+            txtBackHex = new TextBox { Location = new Point(376, 450), Size = new Size(74, 23), MaxLength = 7 };
+            Controls.Add(txtBackHex);
+            tips.SetToolTip(txtBackHex, "배경색 코드 (#RRGGBB) 입력 후 Enter. 비우면 기본색");
+
+            AddLabel(this, "글자색", 16, 493);
+            btnFore = new Button { Text = "색 선택…", Location = new Point(120, 488), Size = new Size(120, 28) };
+            btnForeAuto = new Button { Text = "자동", Location = new Point(246, 488), Size = new Size(110, 28) };
+            txtForeHex = new TextBox { Location = new Point(376, 490), Size = new Size(74, 23), MaxLength = 7 };
+            Controls.Add(txtForeHex);
+            tips.SetToolTip(txtForeHex, "글자색 코드 (#RRGGBB) 입력 후 Enter. 비우면 자동");
             Controls.Add(btnFore);
             Controls.Add(btnForeAuto);
 
@@ -142,14 +169,14 @@ namespace WinDeck
             {
                 Text = "팁: 패널의 빈 칸에 파일·폴더·링크를 끌어다 놓아도 버튼이 바로 만들어집니다.",
                 AutoSize = true,
-                Location = new Point(16, 494),
+                Location = new Point(16, 530),
                 ForeColor = SystemColors.GrayText
             };
             Controls.Add(hint);
 
-            btnTest = new Button { Text = "테스트 실행", Location = new Point(16, 516), Size = new Size(110, 32) };
-            btnOk = new Button { Text = "확인", Location = new Point(412, 516), Size = new Size(96, 32) };
-            btnCancel = new Button { Text = "취소", Location = new Point(514, 516), Size = new Size(96, 32), DialogResult = DialogResult.Cancel };
+            btnTest = new Button { Text = "테스트 실행", Location = new Point(16, 552), Size = new Size(110, 32) };
+            btnOk = new Button { Text = "확인", Location = new Point(412, 552), Size = new Size(96, 32) };
+            btnCancel = new Button { Text = "취소", Location = new Point(514, 552), Size = new Size(96, 32), DialogResult = DialogResult.Cancel };
             Controls.Add(btnTest);
             Controls.Add(btnOk);
             Controls.Add(btnCancel);
@@ -186,6 +213,8 @@ namespace WinDeck
             btnBackCustom.Click += delegate { string c = PickColor(backColor, Theme.KeyBack); if (c != null) { backColor = c; UpdateAppearance(); } };
             btnFore.Click += delegate { string c = PickColor(foreColor, Color.White); if (c != null) { foreColor = c; UpdateAppearance(); } };
             btnForeAuto.Click += delegate { foreColor = ""; UpdateAppearance(); };
+            WireHexBox(txtBackHex, hex => backColor = hex);
+            WireHexBox(txtForeHex, hex => foreColor = hex);
             btnTest.Click += delegate { TestRun(); };
             btnOk.Click += delegate { Accept(); };
 
@@ -369,8 +398,45 @@ namespace WinDeck
             btnTest.Enabled = a == ActionTypes.Folder || a == ActionTypes.Url || a == ActionTypes.Run;
         }
 
+        /// <summary>#RRGGBB 입력칸: Enter 또는 칸을 벗어나면 적용, 비우면 기본/자동, 잘못된 값은 되돌린다.</summary>
+        void WireHexBox(TextBox box, Action<string> apply)
+        {
+            Action commit = delegate
+            {
+                string text = box.Text.Trim();
+                if (text.Length == 0) apply("");
+                else
+                {
+                    string hex = ColorChooser.ParseHex(text);
+                    if (hex == null)
+                    {
+                        System.Media.SystemSounds.Beep.Play();
+                        UpdateAppearance();
+                        return;
+                    }
+                    apply(hex);
+                    ColorChooser.AddRecent(cfg, hex);
+                }
+                UpdateAppearance();
+            };
+            box.KeyDown += (sender, e) => { if (e.KeyCode == Keys.Enter) { commit(); e.SuppressKeyPress = true; } };
+            box.Leave += delegate { commit(); };
+        }
+
         void UpdateAppearance()
         {
+            for (int i = 0; i < recentButtons.Count; i++)
+            {
+                Button rb = recentButtons[i];
+                bool has = i < cfg.RecentColors.Count;
+                rb.Visible = has;
+                if (!has) continue;
+                rb.Tag = cfg.RecentColors[i];
+                rb.BackColor = Theme.ParseColor(cfg.RecentColors[i], Theme.KeyBack);
+                tips.SetToolTip(rb, cfg.RecentColors[i] + "  ·  클릭: 배경색  ·  오른쪽 클릭: 글자색");
+            }
+            if (!txtBackHex.Focused) txtBackHex.Text = backColor ?? "";
+            if (!txtForeHex.Focused) txtForeHex.Text = foreColor ?? "";
             foreach (Button sw in swatchButtons)
             {
                 bool selected = string.Equals((string)sw.Tag, backColor ?? "", StringComparison.OrdinalIgnoreCase);
@@ -459,10 +525,7 @@ namespace WinDeck
 
         string PickColor(string current, Color fallback)
         {
-            using (var cd = new ColorDialog { FullOpen = true, Color = Theme.ParseColor(current, fallback) })
-            {
-                return cd.ShowDialog(this) == DialogResult.OK ? Theme.ToHex(cd.Color) : null;
-            }
+            return ColorChooser.Pick(this, cfg, current, fallback);
         }
 
         void TestRun()

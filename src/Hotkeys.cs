@@ -20,6 +20,8 @@ namespace WinDeck
         public int PageIndex = -1;
         public int ButtonIndex = -1;
         public string Label;
+        /// <summary>버튼 수를 줄여 숨겨진 버튼의 단축키 (등록하지 않고 겹침 검사에만 쓴다).</summary>
+        public bool Hidden;
 
         public bool IsSameTarget(HotkeyKind kind, int pageIndex, int buttonIndex)
         {
@@ -38,7 +40,14 @@ namespace WinDeck
             return KeyCombo.TryParse(combo, out k) ? k.ToString() : null;
         }
 
+        /// <summary>지금 작동하는 단축키 (숨겨진 버튼 제외).</summary>
         public static List<HotkeyEntry> Collect(AppConfig cfg)
+        {
+            return CollectAll(cfg).FindAll(e => !e.Hidden);
+        }
+
+        /// <summary>숨겨진 버튼의 단축키까지 포함한 전체 목록.</summary>
+        public static List<HotkeyEntry> CollectAll(AppConfig cfg)
         {
             var list = new List<HotkeyEntry>();
             Add(list, HotkeyKind.TogglePanel, cfg.Hotkey, -1, -1, "패널 보이기/숨기기");
@@ -54,6 +63,8 @@ namespace WinDeck
                     if (button == null || button.IsEmpty) continue;
                     string title = string.IsNullOrWhiteSpace(button.Title) ? (b + 1) + "번" : "'" + button.Title + "'";
                     Add(list, HotkeyKind.Button, button.Hotkey, p, b, "'" + page.Name + "' 페이지의 " + title + " 버튼");
+                    if (b >= cfg.ButtonCount && list.Count > 0 && list[list.Count - 1].ButtonIndex == b && list[list.Count - 1].PageIndex == p)
+                        list[list.Count - 1].Hidden = true;
                 }
             }
             return list;
@@ -71,7 +82,7 @@ namespace WinDeck
         {
             string normalized = Normalize(combo);
             if (normalized == null) return null;
-            foreach (HotkeyEntry e in Collect(cfg))
+            foreach (HotkeyEntry e in CollectAll(cfg))
             {
                 if (e.IsSameTarget(kind, pageIndex, buttonIndex)) continue;
                 if (string.Equals(e.Combo, normalized, StringComparison.OrdinalIgnoreCase)) return e;
@@ -93,7 +104,7 @@ namespace WinDeck
                 return "'" + k + "' 하나만으로는 쓸 수 없습니다. Ctrl·Alt·Shift·Win 과 함께 지정하세요. (F1~F24 는 단독 사용 가능)";
             HotkeyEntry conflict = FindConflict(cfg, combo, kind, pageIndex, buttonIndex);
             if (conflict != null)
-                return "'" + k + "' 는 이미 [" + conflict.Label + "] 에 쓰이고 있습니다.";
+                return "'" + k + "' 는 이미 [" + conflict.Label + (conflict.Hidden ? " — 버튼 수를 줄여 숨겨진 버튼" : "") + "] 에 쓰이고 있습니다.";
             return null;
         }
     }

@@ -74,6 +74,8 @@ static class SmokeTest
         TestIconLibrary();
         TestRender();
         TestHotkeyDispatch();
+        TestV12();
+        TestV12Render();
         if (args.Contains("--input")) TestInput();
         if (args.Contains("--e2e")) TestEndToEnd();
 
@@ -88,7 +90,8 @@ static class SmokeTest
         AppConfig c = ConfigStore.Load();
         Check(ConfigStore.IsNew, "first load creates new config");
         Check(File.Exists(ConfigStore.ConfigPath), "config.json written");
-        Check(c.Pages.Count == 2 && c.Pages.All(p => p.Buttons.Count == 8), "default config has 2 pages x 8 buttons");
+        Check(c.Pages.Count == 2 && c.ButtonCount == 8 && c.Pages.All(p => p.Buttons.Count == AppConfig.MaxKeyCount),
+            "default config: 2 pages, 8 visible buttons, 16 slots stored");
 
         AppConfig c2 = ConfigStore.Load();
         Check(!ConfigStore.IsNew, "second load reads existing file");
@@ -110,7 +113,7 @@ static class SmokeTest
 
         // normalize short / broken pages
         AppConfig n = ConfigStore.Parse("{\"Pages\":[{\"Name\":\"X\",\"Buttons\":[{\"Title\":\"a\",\"Action\":\"bogus\"}]},{\"Id\":\"\",\"Buttons\":null}]}");
-        Check(n.Pages.Count == 2 && n.Pages.All(p => p.Buttons.Count == 8), "normalize pads pages to 8 buttons");
+        Check(n.Pages.Count == 2 && n.Pages.All(p => p.Buttons.Count == AppConfig.MaxKeyCount), "normalize pads pages to 16 slots");
         Check(n.Pages[0].Buttons[0].Action == ActionTypes.None, "unknown action becomes none");
         Check(n.Pages[1].Name.Length > 0 && n.Pages[1].Id.Length > 0, "missing page name/id filled in");
         Check(n.Hotkey == AppConfig.DefaultHotkey && n.KeySize == 88 && n.Opacity == 100, "missing settings get defaults");
@@ -258,6 +261,172 @@ static class SmokeTest
         }
     }
 
+    // ------------------------------------------------------------------ 1.2: 설정 경량화, 색, 배경, 버튼 수
+
+    static void TestV12()
+    {
+        AppConfig d = AppConfig.CreateDefault();
+        string json = ConfigStore.ToJson(d);
+        Check(json.Length < 30 * 1024, "default config is small with icon references", (json.Length / 1024) + "KB");
+        Check(d.Pages[0].Buttons.Take(8).All(b => b.IconData.StartsWith(IconLibrary.RefPrefix)), "default buttons reference library icons");
+        Check(IconCache.FromData("lib:folder") != null && IconCache.FromData("lib:no-such-icon") == null, "lib: reference renders, unknown falls back");
+
+        AppConfig legacy = AppConfig.CreateDefault();
+        legacy.Pages[0].Buttons[0].IconData = IconLibrary.Find("downloads").Base64;
+        legacy.Pages[0].Buttons[1].IconData = IconCache.LoadIconData(Path.Combine(outDir, "icon_src.png"));
+        AppConfig migrated = ConfigStore.Parse(ConfigStore.ToJson(legacy));
+        Check(migrated.Pages[0].Buttons[0].IconData == "lib:downloads", "1.1 embedded library icon migrates to a reference");
+        Check(migrated.Pages[0].Buttons[1].IconData.Length > 100, "user's own image icon is kept as image");
+
+        Check(ColorChooser.ParseHex("#a1b2c3") == "#A1B2C3" && ColorChooser.ParseHex("A1B2C3") == "#A1B2C3" && ColorChooser.ParseHex("#abc") == "#AABBCC",
+            "hex color input accepts #RRGGBB, RRGGBB, #RGB");
+        Check(ColorChooser.ParseHex("#12345") == null && ColorChooser.ParseHex("zz0000") == null, "invalid hex rejected");
+        AppConfig rc = AppConfig.CreateDefault();
+        for (int i = 0; i < 10; i++) ColorChooser.AddRecent(rc, "#00000" + i);
+        ColorChooser.AddRecent(rc, "#000003");
+        Check(rc.RecentColors.Count == 8 && rc.RecentColors[0] == "#000003" && rc.RecentColors.Count(x => x == "#000003") == 1,
+            "recent colors: newest first, no duplicates, max 8");
+
+        AppConfig oldCfg = ConfigStore.Parse("{\"Pages\":[{\"Name\":\"A\",\"Buttons\":[{\"Title\":\"x\",\"Action\":\"url\",\"Target\":\"a.com\"}]}]}");
+        Check(oldCfg.ButtonCount == 8 && oldCfg.BackgroundH.Mode == PanelBackground.ModeDefault && oldCfg.BackgroundVSameAsH
+            && oldCfg.CustomColors.Count == 0 && oldCfg.RecentColors.Count == 0, "1.1 config gets 1.2 defaults");
+        AppConfig bad = AppConfig.CreateDefault();
+        bad.BackgroundH.Dim = 300;
+        bad.BackgroundH.Mode = PanelBackground.ModeImage; // 이미지 없이 이미지 모드
+        bad.ButtonCount = 13;
+        bad.Normalize();
+        Check(bad.BackgroundH.Dim == 80 && bad.BackgroundH.Mode == PanelBackground.ModeDefault && bad.ButtonCount == 12, "background and button count normalized");
+
+        string big = Path.Combine(outDir, "bg_4k.png");
+        using (Bitmap b = new Bitmap(3840, 2160))
+        {
+            using (Graphics g = Graphics.FromImage(b))
+            using (var br = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, 3840, 2160), Color.SteelBlue, Color.Orange, 30f))
+                g.FillRectangle(br, 0, 0, 3840, 2160);
+            b.Save(big, ImageFormat.Png);
+        }
+        string data = PanelBackgroundRenderer.LoadImageData(big);
+        Size sz = PanelBackgroundRenderer.ImageSize(data);
+        Check(Math.Max(sz.Width, sz.Height) == PanelBackgroundRenderer.MaxImageSide && data.Length < 300 * 1024,
+            "4K background image is reduced to 1280px JPEG", sz + ", " + (data.Length * 3 / 4 / 1024) + "KB");
+
+        AppConfig bgc = AppConfig.CreateDefault();
+        bgc.BackgroundH = new PanelBackground { Mode = PanelBackground.ModeImage, ImageData = data };
+        bgc.BackgroundV = new PanelBackground { Mode = PanelBackground.ModeColor, Color = "#123456" };
+        bgc.Vertical = true;
+        Check(bgc.ActiveBackground == bgc.BackgroundH, "vertical uses horizontal background when 'same' is on");
+        bgc.BackgroundVSameAsH = false;
+        Check(bgc.ActiveBackground == bgc.BackgroundV, "vertical uses its own background when 'same' is off");
+        AppConfig bgrt = ConfigStore.Parse(ConfigStore.ToJson(bgc));
+        Check(bgrt.BackgroundH.ImageData == data && bgrt.BackgroundV.Color == "#123456" && !bgrt.BackgroundVSameAsH, "backgrounds survive save/load");
+
+        var grid = new System.Collections.Generic.List<string>();
+        foreach (int n in AppConfig.ButtonCounts)
+            foreach (bool v in new[] { false, true })
+            {
+                var g2 = new AppConfig { ButtonCount = n, Vertical = v };
+                grid.Add(g2.Columns + "x" + g2.Rows);
+            }
+        Check(string.Join(",", grid.ToArray()) == "4x2,2x4,4x3,3x4,4x4,4x4", "layouts: 4 columns horizontal, 4 rows vertical", string.Join(",", grid.ToArray()));
+
+        // 16 → 8 줄이기
+        AppConfig sh = AppConfig.CreateDefault();
+        sh.ButtonCount = 16;
+        for (int i = 0; i < 16; i++) sh.Pages[0].Buttons[i] = new DeckButton { Title = "A" + i, Action = ActionTypes.Url, Target = "a" + i + ".com" };
+        for (int i = 0; i < 9; i++) sh.Pages[1].Buttons[i] = new DeckButton { Title = "B" + i, Action = ActionTypes.Url, Target = "b.com" };
+        sh.Pages[0].Buttons[12].Hotkey = "Ctrl+Alt+F12";
+        sh.CurrentPage = 1;
+        sh.ButtonCount = 8;
+        Check(!HotkeyMap.Collect(sh).Any(e => e.Combo == "Ctrl+Alt+F12") && HotkeyMap.CollectAll(sh).Any(e => e.Combo == "Ctrl+Alt+F12" && e.Hidden),
+            "hidden button's hotkey is paused but still listed");
+        Check(HotkeyMap.Validate(sh, "Ctrl+Alt+F12", HotkeyKind.Button, 1, 0) != null, "hidden button's hotkey still blocks duplicates");
+        ButtonLayout.HiddenInfo info = ButtonLayout.WouldHide(sh, 8);
+        Check(info.Buttons == 9 && info.Hotkeys == 1 && info.Lines.Count == 2, "shrink preview lists hidden buttons per page", info.Buttons + "/" + info.Hotkeys + "/" + info.Lines.Count);
+        AppConfig hidden = ConfigStore.Parse(ConfigStore.ToJson(sh));
+        Check(hidden.Pages[0].Buttons[15].Title == "A15", "hide mode keeps buttons 9-16 in the config");
+        hidden.ButtonCount = 16;
+        Check(hidden.Pages[0].Buttons[12].Title == "A12", "growing back to 16 shows them in place");
+
+        int created = ButtonLayout.Compact(sh, 8);
+        Check(created == 2 && sh.Pages.Count == 4 && sh.Pages[1].Name == "기본 (이어서)" && sh.Pages[1].Buttons[0].Title == "A8"
+            && sh.Pages[3].Name == "페이지 2 (이어서)" && sh.Pages[3].Buttons[0].Title == "B8",
+            "compact moves overflow to '(이어서)' pages right after each page", string.Join(" | ", sh.Pages.Select(x => x.Name).ToArray()));
+        Check(sh.Pages.All(pg => pg.Buttons.Skip(8).All(b => b.IsEmpty)), "after compact nothing is hidden");
+        Check(sh.Pages[1].Buttons[4].Hotkey == "Ctrl+Alt+F12", "moved button keeps its hotkey");
+        Check(sh.CurrentPage == 2 && sh.Pages[sh.CurrentPage].Name == "페이지 2", "current page follows its page after compact");
+
+        AppConfig fill = AppConfig.CreateDefault();
+        fill.Pages[1].Buttons[2] = new DeckButton { Title = "visible", Action = ActionTypes.Url, Target = "x.com" };
+        fill.Pages[1].Buttons[13] = new DeckButton { Title = "far", Action = ActionTypes.Url, Target = "y.com" };
+        ButtonLayout.Compact(fill, 8);
+        Check(fill.Pages.Count == 2 && fill.Pages[1].Buttons[0].Title == "far" && fill.Pages[1].Buttons[2].Title == "visible",
+            "compact first fills empty visible slots of the same page");
+    }
+
+    static void TestV12Render()
+    {
+        string bgData = PanelBackgroundRenderer.LoadImageData(Path.Combine(outDir, "bg_4k.png"));
+        var shots = new[]
+        {
+            new { Name = "deck_12.png", Count = 12, Vertical = false, Bg = (PanelBackground)null },
+            new { Name = "deck_16_vertical.png", Count = 16, Vertical = true, Bg = (PanelBackground)null },
+            new { Name = "deck_color_bg.png", Count = 8, Vertical = false, Bg = new PanelBackground { Mode = PanelBackground.ModeColor, Color = "#1F3A5F" } },
+            new { Name = "deck_image_bg.png", Count = 12, Vertical = false, Bg = new PanelBackground { Mode = PanelBackground.ModeImage, ImageData = bgData, Dim = 30 } },
+            new { Name = "deck_light_bg.png", Count = 8, Vertical = false, Bg = new PanelBackground { Mode = PanelBackground.ModeColor, Color = "#F2F2F2" } }
+        };
+        foreach (var shot in shots)
+        {
+            AppConfig c = AppConfig.CreateDefault();
+            c.ButtonCount = shot.Count;
+            c.Vertical = shot.Vertical;
+            if (shot.Bg != null) c.BackgroundH = shot.Bg;
+            c.HasPosition = true;
+            c.WindowX = 60;
+            c.WindowY = 60;
+            var deck = new DeckForm(c, false);
+            deck.Show();
+            Pump(300);
+            int visible = deck.Controls.OfType<DeckKey>().Count(k => k.Visible);
+            Check(visible == shot.Count, shot.Name + ": shows " + shot.Count + " keys", visible.ToString());
+            Save(deck, shot.Name);
+            deck.Close();
+            deck.Dispose();
+        }
+
+        AppConfig sc = AppConfig.CreateDefault();
+        sc.BackgroundH = new PanelBackground { Mode = PanelBackground.ModeImage, ImageData = bgData, Dim = 30 };
+        sc.RecentColors.AddRange(new[] { "#C42B1C", "#0063B1", "#FFB900" });
+        var s = new SettingsForm(ConfigStore.Clone(sc), false);
+        s.InitialTab = 1;
+        s.StartPosition = FormStartPosition.Manual;
+        s.Location = new Point(-6000, 0);
+        s.Show();
+        Pump(400);
+        Save(s, "settings_background.png");
+        s.Close();
+        s.Dispose();
+
+        AppConfig shrink = AppConfig.CreateDefault();
+        for (int i = 8; i < 14; i++) shrink.Pages[0].Buttons[i] = new DeckButton { Title = "버튼" + (i + 1), Action = ActionTypes.Url, Target = "x.com", Hotkey = i == 9 ? "Ctrl+Alt+9" : "" };
+        var dlg = new ShrinkDialog(16, 8, ButtonLayout.WouldHide(shrink, 8));
+        dlg.StartPosition = FormStartPosition.Manual;
+        dlg.Location = new Point(-6000, 0);
+        dlg.Show();
+        Pump(300);
+        Save(dlg, "shrink_dialog.png");
+        dlg.Close();
+        dlg.Dispose();
+
+        var ed = new ButtonEditForm(sc.Pages[0].Buttons[4].Clone(), sc);
+        ed.StartPosition = FormStartPosition.Manual;
+        ed.Location = new Point(-6000, 0);
+        ed.Show();
+        Pump(300);
+        Save(ed, "edit_colors.png");
+        ed.Close();
+        ed.Dispose();
+    }
+
     static void TestIconLibrary()
     {
         int expected = File.ReadAllLines(Path.Combine(RepoRoot, "assets", "icons", "manifest.tsv"))
@@ -374,7 +543,7 @@ static class SmokeTest
         AppConfig withKeys = ConfigStore.Clone(cfg);
         withKeys.Pages[1].Hotkey = "Ctrl+Alt+2";
         withKeys.Pages[0].Buttons[4].Hotkey = "Ctrl+Alt+H";
-        for (int tab = 0; tab < 4; tab++)
+        for (int tab = 0; tab < 5; tab++)
         {
             var s = new SettingsForm(ConfigStore.Clone(withKeys), false);
             s.InitialTab = tab;

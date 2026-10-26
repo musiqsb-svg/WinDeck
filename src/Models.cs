@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Web.Script.Serialization;
 
 namespace WinDeck
@@ -84,6 +85,7 @@ namespace WinDeck
             if (BackColor == null) BackColor = "";
             if (ForeColor == null) ForeColor = "";
             if (Hotkey == null) Hotkey = "";
+            IconData = IconLibrary.ToReference(IconData);
             if (Array.IndexOf(ActionTypes.All, Action) < 0) Action = ActionTypes.None;
         }
     }
@@ -112,14 +114,59 @@ namespace WinDeck
         public static DeckPage CreateEmpty(string name)
         {
             var p = new DeckPage { Name = name };
-            for (int i = 0; i < AppConfig.KeyCount; i++) p.Buttons.Add(new DeckButton());
+            for (int i = 0; i < AppConfig.MaxKeyCount; i++) p.Buttons.Add(new DeckButton());
             return p;
+        }
+    }
+
+    /// <summary>패널 배경 (가로·세로 배치마다 하나).</summary>
+    public class PanelBackground
+    {
+        public const string ModeDefault = "default";
+        public const string ModeColor = "color";
+        public const string ModeImage = "image";
+        public const string FitFill = "fill";
+        public const string FitFit = "fit";
+        public const string FitStretch = "stretch";
+
+        public string Mode { get; set; }
+        public string Color { get; set; }
+        /// <summary>패널 크기에 맞게 줄인 JPEG (base64). 원본은 보관하지 않는다.</summary>
+        public string ImageData { get; set; }
+        public string Fit { get; set; }
+        /// <summary>이미지 위에 덮는 어둡기 (0~80%).</summary>
+        public int Dim { get; set; }
+
+        public PanelBackground()
+        {
+            Mode = ModeDefault;
+            Color = "";
+            ImageData = "";
+            Fit = FitFill;
+            Dim = 30;
+        }
+
+        public PanelBackground Clone()
+        {
+            return (PanelBackground)MemberwiseClone();
+        }
+
+        internal void Normalize()
+        {
+            if (Color == null) Color = "";
+            if (ImageData == null) ImageData = "";
+            if (Mode != ModeColor && Mode != ModeImage) Mode = ModeDefault;
+            if (Mode == ModeImage && ImageData.Length == 0) Mode = ModeDefault;
+            if (Fit != FitFit && Fit != FitStretch) Fit = FitFill;
+            Dim = Math.Max(0, Math.Min(80, Dim));
         }
     }
 
     public class AppConfig
     {
-        public const int KeyCount = 8;
+        /// <summary>페이지마다 보관하는 버튼 칸 수 (보이는 칸은 ButtonCount).</summary>
+        public const int MaxKeyCount = 16;
+        public static readonly int[] ButtonCounts = { 8, 12, 16 };
         public const string DefaultHotkey = "Ctrl+`";
         public const string DefaultPrevPageHotkey = "Ctrl+Alt+Left";
         public const string DefaultNextPageHotkey = "Ctrl+Alt+Right";
@@ -138,6 +185,16 @@ namespace WinDeck
         public int WindowX { get; set; }
         public int WindowY { get; set; }
         public int CurrentPage { get; set; }
+        /// <summary>모든 페이지 공통 버튼 수 8·12·16. 줄여도 뒤쪽 버튼은 지우지 않고 숨겨서 보관한다.</summary>
+        public int ButtonCount { get; set; }
+        public PanelBackground BackgroundH { get; set; }
+        public PanelBackground BackgroundV { get; set; }
+        /// <summary>세로 배치에도 가로 배치 배경을 쓴다 (이미지는 자동으로 잘라 맞춤).</summary>
+        public bool BackgroundVSameAsH { get; set; }
+        /// <summary>색 선택 창의 사용자 지정 색 16칸 (Windows COLORREF).</summary>
+        public List<int> CustomColors { get; set; }
+        /// <summary>최근 고른 색 (#RRGGBB, 최신순 최대 8개).</summary>
+        public List<string> RecentColors { get; set; }
         public List<DeckPage> Pages { get; set; }
 
         public AppConfig()
@@ -149,7 +206,32 @@ namespace WinDeck
             KeySize = 88;
             Opacity = 100;
             TopMost = true;
+            ButtonCount = 8;
+            BackgroundH = new PanelBackground();
+            BackgroundV = new PanelBackground();
+            BackgroundVSameAsH = true;
+            CustomColors = new List<int>();
+            RecentColors = new List<string>();
             Pages = new List<DeckPage>();
+        }
+
+        /// <summary>지금 배치(가로/세로)에 쓰는 배경.</summary>
+        [ScriptIgnore]
+        public PanelBackground ActiveBackground
+        {
+            get { return Vertical && !BackgroundVSameAsH ? BackgroundV : BackgroundH; }
+        }
+
+        [ScriptIgnore]
+        public int Columns
+        {
+            get { return Vertical ? ButtonCount / 4 : 4; }
+        }
+
+        [ScriptIgnore]
+        public int Rows
+        {
+            get { return Vertical ? 4 : ButtonCount / 4; }
         }
 
         public static AppConfig CreateDefault()
@@ -172,6 +254,7 @@ namespace WinDeck
 
             c.Pages.Add(p);
             c.Pages.Add(DeckPage.CreateEmpty("페이지 2"));
+            c.Normalize();
             return c;
         }
 
@@ -185,7 +268,7 @@ namespace WinDeck
                 Action = action,
                 Target = target,
                 BackColor = back,
-                IconData = asset == null ? "" : asset.Base64
+                IconData = asset == null ? "" : IconLibrary.Reference(asset)
             };
         }
 
@@ -198,6 +281,15 @@ namespace WinDeck
             KeySize = Math.Max(56, Math.Min(160, KeySize));
             if (Opacity <= 0) Opacity = 100;
             Opacity = Math.Max(30, Math.Min(100, Opacity));
+            ButtonCount = ButtonCounts.OrderBy(n => Math.Abs(n - ButtonCount)).First();
+            if (BackgroundH == null) BackgroundH = new PanelBackground();
+            if (BackgroundV == null) BackgroundV = new PanelBackground();
+            BackgroundH.Normalize();
+            BackgroundV.Normalize();
+            if (CustomColors == null) CustomColors = new List<int>();
+            if (RecentColors == null) RecentColors = new List<string>();
+            RecentColors.RemoveAll(c => string.IsNullOrWhiteSpace(c));
+            if (RecentColors.Count > 8) RecentColors.RemoveRange(8, RecentColors.Count - 8);
             if (Pages == null) Pages = new List<DeckPage>();
             Pages.RemoveAll(p => p == null);
             if (Pages.Count == 0) Pages.Add(DeckPage.CreateEmpty("기본"));
@@ -219,8 +311,8 @@ namespace WinDeck
                     if (p.Buttons[j] == null) p.Buttons[j] = new DeckButton();
                     p.Buttons[j].Normalize();
                 }
-                while (p.Buttons.Count < KeyCount) p.Buttons.Add(new DeckButton());
-                if (p.Buttons.Count > KeyCount) p.Buttons.RemoveRange(KeyCount, p.Buttons.Count - KeyCount);
+                while (p.Buttons.Count < MaxKeyCount) p.Buttons.Add(new DeckButton());
+                if (p.Buttons.Count > MaxKeyCount) p.Buttons.RemoveRange(MaxKeyCount, p.Buttons.Count - MaxKeyCount);
             }
             CurrentPage = Math.Max(0, Math.Min(Pages.Count - 1, CurrentPage));
         }

@@ -16,7 +16,8 @@ namespace WinDeck
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            using (var pb = new SolidBrush(parentBack)) g.FillRectangle(pb, bounds);
+            if (!parentBack.IsEmpty) // 비어 있으면 호출한 쪽(패널 배경)이 이미 그렸다
+                using (var pb = new SolidBrush(parentBack)) g.FillRectangle(pb, bounds);
 
             var r = new RectangleF(bounds.X + 0.5f, bounds.Y + 0.5f, bounds.Width - 1f, bounds.Height - 1f);
             if (pressed) r.Inflate(-2f, -2f);
@@ -160,9 +161,9 @@ namespace WinDeck
         {
             using (GraphicsPath path = Theme.RoundRect(r, radius))
             {
-                if (hover)
-                    using (var br = new SolidBrush(Theme.Blend(parentBack, Color.White, 0.06f)))
-                        g.FillPath(br, path);
+                // 반투명으로 칠해 단색·사진 배경 어디서든 빈 칸이 보이게 한다
+                using (var br = new SolidBrush(hover ? Color.FromArgb(28, 255, 255, 255) : Color.FromArgb(46, 0, 0, 0)))
+                    g.FillPath(br, path);
                 using (var pen = new Pen(hover ? Theme.TextDim : Theme.KeyEmptyBorder, Math.Max(1f, size / 70f)))
                 {
                     pen.DashStyle = DashStyle.Dash;

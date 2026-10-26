@@ -12,7 +12,7 @@ namespace WinDeck
     /// 항상 위에 떠 있는 버튼 패널.
     /// WS_EX_NOACTIVATE 창이라 클릭해도 활성화되지 않으므로, 문장·단축키가 원래 쓰던 창에 그대로 들어간다.
     /// </summary>
-    public class DeckForm : Form
+    public class DeckForm : Form, IBackgroundHost
     {
         const int HotkeyIdBase = 0x5D01;
 
@@ -25,6 +25,9 @@ namespace WinDeck
         readonly ContextMenuStrip keyMenu, panelMenu;
         readonly Timer foregroundTimer;
         readonly Timer modifierTimer;
+        Bitmap bgCache;
+        bool bgHasImage;
+        Color barText = Theme.Text, barTextDim = Theme.TextDim;
         readonly Dictionary<int, HotkeyEntry> hotkeys = new Dictionary<int, HotkeyEntry>();
         string lastHotkeyFailure = "";
         int pendingPage = -1, pendingButton = -1;
@@ -72,7 +75,7 @@ namespace WinDeck
             ContextMenuStrip = panelMenu;
             tip.SetToolTip(this, "·");
 
-            for (int i = 0; i < AppConfig.KeyCount; i++)
+            for (int i = 0; i < AppConfig.MaxKeyCount; i++)
             {
                 var k = new DeckKey(i);
                 k.KeyClicked += Key_Clicked;
@@ -211,6 +214,7 @@ namespace WinDeck
             {
                 foregroundTimer.Dispose();
                 modifierTimer.Dispose();
+                if (bgCache != null) bgCache.Dispose();
                 if (tray != null) tray.Dispose();
             }
             base.Dispose(disposing);
@@ -239,8 +243,8 @@ namespace WinDeck
         {
             int pad = S(10), gap = S(8), k = S(cfg.KeySize);
             int barTop = S(7), barH = S(26);
-            int cols = cfg.Vertical ? 2 : 4;
-            int rows = cfg.Vertical ? 4 : 2;
+            int cols = cfg.Columns;
+            int rows = cfg.Rows;
             int gridTop = barTop + barH + S(7);
             int width = pad * 2 + cols * k + (cols - 1) * gap;
             int height = gridTop + rows * k + (rows - 1) * gap + pad;
@@ -249,6 +253,7 @@ namespace WinDeck
             for (int i = 0; i < keys.Count; i++)
             {
                 int c = i % cols, r = i / cols;
+                keys[i].Visible = i < cfg.ButtonCount; // 줄인 뒤쪽 칸은 숨기기만 하고 데이터는 보관
                 keys[i].Bounds = new Rectangle(pad + c * (k + gap), gridTop + r * (k + gap), k, k);
             }
 
@@ -258,7 +263,53 @@ namespace WinDeck
             btnHide.Bounds = new Rectangle(width - pad + S(3) - bw, barTop, bw, barH);
             btnSettings.Bounds = new Rectangle(btnHide.Left - bw, barTop, bw, barH);
             titleRect = new Rectangle(btnNext.Right + S(6), barTop, Math.Max(0, btnSettings.Left - btnNext.Right - S(10)), barH);
+            RebuildBackground();
+        }
+
+        /// <summary>
+        /// 배경 비트맵을 패널 크기로 한 번 만들어 둔다 (이미지일 때만). 버튼·막대는 이 비트맵의 일부를 잘라 그린다.
+        /// 배경 밝기에 따라 페이지 이름 글자색도 정한다.
+        /// </summary>
+        void RebuildBackground()
+        {
+            PanelBackground bg = cfg.ActiveBackground;
+            BackColor = PanelBackgroundRenderer.BaseColor(bg);
+            if (bgCache != null)
+            {
+                bgCache.Dispose();
+                bgCache = null;
+            }
+            bgHasImage = PanelBackgroundRenderer.HasImage(bg);
+            if (bgHasImage) bgCache = PanelBackgroundRenderer.Build(bg, ClientSize, S(40));
+            bool light = bgCache != null
+                ? PanelBackgroundRenderer.IsLight(bgCache, new Rectangle(0, 0, ClientSize.Width, S(40)))
+                : Theme.Luminance(BackColor) > 0.6;
+            barText = light ? Color.FromArgb(28, 28, 30) : Theme.Text;
+            barTextDim = light ? Color.FromArgb(84, 84, 90) : Theme.TextDim;
+            foreach (Control c in Controls) c.Invalidate();
             Invalidate();
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            if (bgCache != null) e.Graphics.DrawImage(bgCache, e.ClipRectangle, e.ClipRectangle, GraphicsUnit.Pixel);
+            else base.OnPaintBackground(e);
+        }
+
+        public void PaintChildBackground(Graphics g, Control child)
+        {
+            if (bgCache != null) g.DrawImage(bgCache, new Rectangle(0, 0, child.Width, child.Height), child.Bounds, GraphicsUnit.Pixel);
+            else g.Clear(BackColor);
+        }
+
+        public Color BarForeColor
+        {
+            get { return barText; }
+        }
+
+        public Color BarDimColor
+        {
+            get { return barTextDim; }
         }
 
         void ClampToScreen()
@@ -303,12 +354,18 @@ namespace WinDeck
             // 좁은 세로 배치에서는 페이지 번호보다 이름을 우선해서 보여준다.
             bool showCount = ns.Width + S(6) + cs.Width <= titleRect.Width;
             int nameWidth = showCount ? ns.Width : titleRect.Width;
-            TextRenderer.DrawText(g, name, titleFont, new Rectangle(titleRect.X, titleRect.Y, nameWidth, titleRect.Height),
-                Theme.Text, flags | TextFormatFlags.EndEllipsis);
+            var nameRect = new Rectangle(titleRect.X, titleRect.Y, nameWidth, titleRect.Height);
+            if (bgHasImage) // 사진 위에서도 읽히도록 그림자
+            {
+                Rectangle shadow = nameRect;
+                shadow.Offset(1, 1);
+                TextRenderer.DrawText(g, name, titleFont, shadow, barText == Theme.Text ? Color.Black : Color.White, flags | TextFormatFlags.EndEllipsis);
+            }
+            TextRenderer.DrawText(g, name, titleFont, nameRect, barText, flags | TextFormatFlags.EndEllipsis);
             if (showCount)
                 TextRenderer.DrawText(g, count, countFont,
                     new Rectangle(titleRect.X + nameWidth + S(6), titleRect.Y, cs.Width + S(2), titleRect.Height),
-                    Theme.TextDim, flags);
+                    barTextDim, flags);
         }
 
         GlyphButton AddBarButton(string glyph, string tipTitle, EventHandler onClick)

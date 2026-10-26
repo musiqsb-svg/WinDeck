@@ -47,7 +47,10 @@ namespace WinDeck
     public static class IconLibrary
     {
         const string Prefix = "WinDeck.Icons.";
+        /// <summary>버튼 IconData 에 이미지 대신 넣는 기본 아이콘 참조. 예: "lib:folder"</summary>
+        public const string RefPrefix = "lib:";
         static List<IconAsset> all;
+        static Dictionary<string, string> nameByBase64;
 
         public static List<IconAsset> All
         {
@@ -61,6 +64,28 @@ namespace WinDeck
         public static IconAsset Find(string name)
         {
             return All.FirstOrDefault(a => a.Name == name);
+        }
+
+        public static string Reference(IconAsset asset)
+        {
+            return RefPrefix + asset.Name;
+        }
+
+        /// <summary>
+        /// 기본 아이콘을 이미지째 저장한 예전 설정(1.1.0)을 "lib:이름" 참조로 바꾼다. 다른 이미지는 그대로 둔다.
+        /// 설정 파일이 아이콘 하나당 약 20KB 줄어든다.
+        /// </summary>
+        public static string ToReference(string iconData)
+        {
+            if (string.IsNullOrEmpty(iconData) || iconData.Length < 200 || iconData.StartsWith(RefPrefix, StringComparison.Ordinal))
+                return iconData;
+            if (nameByBase64 == null)
+            {
+                nameByBase64 = new Dictionary<string, string>();
+                foreach (IconAsset a in All) nameByBase64[a.Base64] = a.Name;
+            }
+            string name;
+            return nameByBase64.TryGetValue(iconData, out name) ? RefPrefix + name : iconData;
         }
 
         public static List<string> Categories
@@ -241,11 +266,11 @@ namespace WinDeck
             Close();
         }
 
-        /// <summary>고른 아이콘의 base64 PNG, 취소하면 null.</summary>
+        /// <summary>고른 아이콘의 참조("lib:이름"), 취소하면 null.</summary>
         public static string Pick(IWin32Window owner, Color keyBack)
         {
             using (var f = new IconPickerForm(keyBack))
-                return f.ShowDialog(owner) == DialogResult.OK && f.Selected != null ? f.Selected.Base64 : null;
+                return f.ShowDialog(owner) == DialogResult.OK && f.Selected != null ? IconLibrary.Reference(f.Selected) : null;
         }
 
         /// <summary>버튼 모양 위에 아이콘과 이름을 그리는 칸.</summary>

@@ -31,6 +31,11 @@ namespace WinDeck
 
         public static Image FromData(string data)
         {
+            if (data.StartsWith(IconLibrary.RefPrefix, StringComparison.Ordinal))
+            {
+                IconAsset asset = IconLibrary.Find(data.Substring(IconLibrary.RefPrefix.Length));
+                return asset == null ? null : asset.Image;
+            }
             Image img;
             if (dataCache.TryGetValue(data, out img)) return img;
             try

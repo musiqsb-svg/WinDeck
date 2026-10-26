@@ -4,6 +4,14 @@ using System.Windows.Forms;
 
 namespace WinDeck
 {
+    /// <summary>배경 이미지를 가진 부모(패널). 자식 컨트롤은 자기 자리의 배경을 부모에게서 받아 그린다.</summary>
+    public interface IBackgroundHost
+    {
+        void PaintChildBackground(Graphics g, Control child);
+        Color BarForeColor { get; }
+        Color BarDimColor { get; }
+    }
+
     /// <summary>
     /// 패널의 버튼 한 칸. 포커스를 받지 않는 컨트롤이라 클릭해도 원래 쓰던 창의 커서가 유지된다.
     /// </summary>
@@ -87,8 +95,16 @@ namespace WinDeck
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            KeyRenderer.Draw(e.Graphics, ClientRectangle, Data, hover, pressed, flash,
-                Parent != null ? Parent.BackColor : Theme.PanelBack);
+            var host = Parent as IBackgroundHost;
+            if (host != null)
+            {
+                host.PaintChildBackground(e.Graphics, this);
+                KeyRenderer.Draw(e.Graphics, ClientRectangle, Data, hover, pressed, flash, Color.Empty);
+            }
+            else
+            {
+                KeyRenderer.Draw(e.Graphics, ClientRectangle, Data, hover, pressed, flash, Parent != null ? Parent.BackColor : Theme.PanelBack);
+            }
         }
 
         protected override void Dispose(bool disposing)
@@ -145,19 +161,22 @@ namespace WinDeck
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            Color parentBack = Parent != null ? Parent.BackColor : Theme.PanelBack;
-            g.Clear(parentBack);
+            var host = Parent as IBackgroundHost;
+            if (host != null) host.PaintChildBackground(g, this);
+            else g.Clear(Parent != null ? Parent.BackColor : Theme.PanelBack);
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             if (Enabled && (hover || pressed))
             {
-                Color bg = pressed ? Theme.Lighten(Theme.BarHover, 0.08f) : Theme.BarHover;
+                Color bg = Color.FromArgb(pressed ? 70 : 45, 255, 255, 255); // 어떤 배경 위에서도 보이도록 반투명
                 using (var path = Theme.RoundRect(new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f), Height * 0.22f))
                 using (var br = new SolidBrush(bg))
                     g.FillPath(br, path);
             }
             int gs = (int)(Height * 0.5f);
             var gr = new Rectangle((Width - gs) / 2, (Height - gs) / 2, gs, gs);
-            KeyRenderer.DrawGlyph(g, Glyph, gr, Enabled ? (hover ? Theme.Text : Theme.TextDim) : Theme.KeyEmptyBorder);
+            Color fore = host != null ? host.BarForeColor : Theme.Text;
+            Color dim = host != null ? host.BarDimColor : Theme.TextDim;
+            KeyRenderer.DrawGlyph(g, Glyph, gr, Enabled ? (hover ? fore : dim) : Color.FromArgb(110, dim));
         }
     }
 
