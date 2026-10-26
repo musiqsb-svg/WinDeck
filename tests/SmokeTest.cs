@@ -24,6 +24,7 @@ static class SmokeTest
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point p);
     [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, MINPUT[] inputs, int size);
+    [DllImport("user32.dll")] static extern uint GetGuiResources(IntPtr h, uint flags);
 
     [StructLayout(LayoutKind.Sequential)]
     struct MINPUT { public uint type; public MOUSEINPUT mi; }
@@ -76,6 +77,8 @@ static class SmokeTest
         TestHotkeyDispatch();
         TestV12();
         TestV12Render();
+        TestFinalQa();
+        if (args.Contains("--actions")) TestRealActions();
         if (args.Contains("--input")) TestInput();
         if (args.Contains("--e2e")) TestEndToEnd();
 
@@ -425,6 +428,165 @@ static class SmokeTest
         Save(ed, "edit_colors.png");
         ed.Close();
         ed.Dispose();
+    }
+
+    // ------------------------------------------------------------------ 최종 검수
+
+    static void TestFinalQa()
+    {
+        // 실행 중 버튼 수 변경
+        AppConfig c = AppConfig.CreateDefault();
+        c.HasPosition = true;
+        c.WindowX = 60;
+        c.WindowY = 60;
+        var deck = new DeckForm(c, false);
+        deck.Show();
+        Pump(200);
+        Size size8 = deck.ClientSize;
+        foreach (int n in new[] { 16, 12, 8 })
+        {
+            deck.Config.ButtonCount = n;
+            deck.ApplyConfig(false);
+            Pump(100);
+            int visible = deck.Controls.OfType<DeckKey>().Count(k => k.Visible);
+            Check(visible == n, "runtime switch to " + n + " keys", visible.ToString());
+        }
+        Check(deck.ClientSize == size8, "panel returns to the same size after 16→12→8", deck.ClientSize.ToString());
+        deck.Config.ButtonCount = 16;
+        deck.Config.Vertical = true;
+        deck.ApplyConfig(false);
+        Pump(100);
+        Rectangle wa = Screen.FromControl(deck).WorkingArea;
+        Check(wa.Contains(deck.Bounds), "16 keys vertical panel stays on screen", deck.Bounds + " in " + wa);
+
+        // 배경 다시 만들기를 반복해도 GDI 개체·메모리가 늘지 않는지
+        deck.Config.BackgroundH = new PanelBackground
+        {
+            Mode = PanelBackground.ModeImage,
+            ImageData = PanelBackgroundRenderer.LoadImageData(Path.Combine(outDir, "bg_4k.png")),
+            Dim = 30
+        };
+        deck.Config.Vertical = false;
+        deck.ApplyConfig(false);
+        Pump(200);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        IntPtr me = Process.GetCurrentProcess().Handle;
+        uint gdi0 = GetGuiResources(me, 0);
+        long mem0 = GC.GetTotalMemory(true);
+        for (int i = 0; i < 40; i++)
+        {
+            deck.Config.Vertical = i % 2 == 0;
+            deck.Config.ButtonCount = AppConfig.ButtonCounts[i % 3];
+            deck.ApplyConfig(false);
+            Application.DoEvents();
+        }
+        Pump(200);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        uint gdi1 = GetGuiResources(me, 0);
+        long mem1 = GC.GetTotalMemory(true);
+        Check(gdi1 <= gdi0 + 6, "40 background/layout rebuilds leak no GDI objects", gdi0 + " → " + gdi1);
+        Check(mem1 - mem0 < 4 * 1024 * 1024, "40 rebuilds keep managed memory flat", ((mem1 - mem0) / 1024) + "KB");
+        deck.Close();
+        deck.Dispose();
+
+        // 설정 창에서 16 → 8 로 줄일 때: 확인 창 취소 → 그대로, 당기기 선택 → 정리되어 저장
+        foreach (bool compact in new[] { false, true })
+        {
+            AppConfig w = AppConfig.CreateDefault();
+            w.ButtonCount = 16;
+            for (int i = 8; i < 12; i++) w.Pages[0].Buttons[i] = new DeckButton { Title = "X" + i, Action = ActionTypes.Url, Target = "x.com" };
+            w.Normalize();
+            var sf = new SettingsForm(w, false);
+            sf.StartPosition = FormStartPosition.Manual;
+            sf.Location = new Point(-6000, 0);
+            sf.Show();
+            Pump(200);
+            var cbo = (ComboBox)typeof(SettingsForm).GetField("cboCount", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).GetValue(sf);
+            cbo.SelectedIndex = 0; // 8개
+            bool sawDialog = false;
+            var t = new System.Windows.Forms.Timer { Interval = 150 };
+            t.Tick += delegate
+            {
+                ShrinkDialog d = Application.OpenForms.OfType<ShrinkDialog>().FirstOrDefault();
+                if (d == null) return;
+                t.Stop();
+                sawDialog = true;
+                if (compact)
+                {
+                    d.Controls.OfType<RadioButton>().First(r => r.Text.StartsWith("빈 칸")).Checked = true;
+                    d.Controls.OfType<Button>().First(b => b.Text == "확인").PerformClick();
+                }
+                else d.Controls.OfType<Button>().First(b => b.Text == "취소").PerformClick();
+            };
+            t.Start();
+            sf.Controls.OfType<Button>().First(b => b.Text == "확인").PerformClick();
+            Pump(300);
+            t.Stop();
+            if (!compact)
+                Check(sawDialog && sf.Visible && sf.Result == null, "settings: cancelling the shrink dialog keeps the settings window open");
+            else
+                Check(sawDialog && sf.Result != null && sf.Result.ButtonCount == 8 && sf.Result.Pages[0].Buttons.Skip(8).All(b => b.IsEmpty)
+                    && sf.Result.Pages.Count == 3 && sf.Result.Pages[0].Buttons.Count(b => !b.IsEmpty) == 8,
+                    "settings: choosing 'compact' saves 8 keys with overflow moved to a new page",
+                    sf.Result == null ? "no result" : sf.Result.Pages.Count + " pages");
+            if (sf.Visible) sf.Close();
+            sf.Dispose();
+        }
+    }
+
+    // 폴더 열기·프로그램 실행을 실제로 실행 (탐색기 창과 명령 창이 잠깐 열린다)
+    static void TestRealActions()
+    {
+        string folder = Path.Combine(outDir, "open-me");
+        Directory.CreateDirectory(folder);
+        ActionRunner.Run(new DeckButton { Action = ActionTypes.Folder, Target = folder }, null);
+        bool found = false;
+        Type shellType = Type.GetTypeFromProgID("Shell.Application");
+        object shell = Activator.CreateInstance(shellType);
+        for (int i = 0; i < 40 && !found; i++)
+        {
+            Pump(150);
+            object windows = shellType.InvokeMember("Windows", System.Reflection.BindingFlags.InvokeMethod, null, shell, null);
+            foreach (object w in (System.Collections.IEnumerable)windows)
+            {
+                try
+                {
+                    object doc = w.GetType().InvokeMember("Document", System.Reflection.BindingFlags.GetProperty, null, w, null);
+                    object fld = doc.GetType().InvokeMember("Folder", System.Reflection.BindingFlags.GetProperty, null, doc, null);
+                    object self = fld.GetType().InvokeMember("Self", System.Reflection.BindingFlags.GetProperty, null, fld, null);
+                    string path = (string)self.GetType().InvokeMember("Path", System.Reflection.BindingFlags.GetProperty, null, self, null);
+                    if (string.Equals(path.TrimEnd('\\'), folder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                    {
+                        found = true;
+                        w.GetType().InvokeMember("Quit", System.Reflection.BindingFlags.InvokeMethod, null, w, null);
+                        break;
+                    }
+                }
+                catch (Exception) { }
+            }
+        }
+        Check(found, "folder action opens that folder in Explorer (window closed again)");
+
+        string marker = Path.Combine(outDir, "run-marker.txt");
+        if (File.Exists(marker)) File.Delete(marker);
+        ActionRunner.Run(new DeckButton { Action = ActionTypes.Run, Target = "cmd.exe", Args = "/c echo ok> \"" + marker + "\"" }, null);
+        for (int i = 0; i < 40 && !File.Exists(marker); i++) Pump(100);
+        Check(File.Exists(marker), "run action starts a program with arguments");
+
+        bool threw = false;
+        try { ActionRunner.Run(new DeckButton { Action = ActionTypes.Folder, Target = Path.Combine(outDir, "no-such-folder") }, null); }
+        catch (ActionException) { threw = true; }
+        Check(threw, "missing folder gives a friendly error");
+        threw = false;
+        try { ActionRunner.Run(new DeckButton { Action = ActionTypes.Run, Target = Path.Combine(outDir, "no-such.exe") }, null); }
+        catch (ActionException) { threw = true; }
+        Check(threw, "missing program gives a friendly error");
+        threw = false;
+        try { ActionRunner.Run(new DeckButton { Action = ActionTypes.Hotkey, Target = "Ctrl+Nope" }, null); }
+        catch (ActionException) { threw = true; }
+        Check(threw, "invalid hotkey action gives a friendly error");
     }
 
     static void TestIconLibrary()
