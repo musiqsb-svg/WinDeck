@@ -1,6 +1,7 @@
 # Builds the team release packages into .\release :
 #   WinDeck-Setup-<version>.exe     (Inno Setup installer, per-user, no admin)
 #   WinDeck-Portable-<version>.zip  (unzip and run; settings in WinDeckData next to the exe)
+#   WinDeck-SHA256-<version>.txt    (hashes of both; upload it too - the in-app updater requires it)
 # The version comes from src\AssemblyInfo.cs. Optional team default buttons: deploy\WinDeck.defaults.json
 # Usage: powershell -ExecutionPolicy Bypass -File release.ps1
 $ErrorActionPreference = 'Stop'
@@ -59,6 +60,14 @@ $iscc = @(
 if (-not $iscc) { throw 'Inno Setup 6 (ISCC.exe) not found. Install: winget install JRSoftware.InnoSetup' }
 & $iscc /Q "/DAppVersion=$version" (Join-Path $root 'installer\WinDeck.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Installer compile failed.' }
+
+# ---- SHA-256 list (the in-app updater installs a download only if its hash matches this list) ----
+$sums = Join-Path $release "WinDeck-SHA256-$version.txt"
+$lines = foreach ($name in @("WinDeck-Setup-$version.exe", "WinDeck-Portable-$version.zip")) {
+    $hash = (Get-FileHash (Join-Path $release $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $name"
+}
+[IO.File]::WriteAllText($sums, (($lines -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
 
 Write-Host ""
 Write-Host "Release $version ready:"

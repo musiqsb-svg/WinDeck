@@ -16,9 +16,11 @@
 |---|---|
 | `WinDeck-Setup-x.y.z.exe` | 설치판 — 관리자 권한 없이 설치, 시작 메뉴 등록, Windows 설정 > 앱에서 제거 |
 | `WinDeck-Portable-x.y.z.zip` | 포터블판 — 압축 풀고 `WinDeck.exe` 실행, 설정은 같은 폴더에 저장 |
+| `WinDeck-SHA256-x.y.z.txt` | 자동 업데이트가 받은 파일을 검사할 때 쓰는 목록 (직접 받을 필요 없음) |
 
 - 요구 사항: Windows 10/11 (기본 내장 .NET Framework 4.8 사용, 추가 설치 없음)
 - 처음 실행할 때 "Windows의 PC 보호" 창이 뜨면 → [아래 그림대로](#처음-실행할-때-경고가-뜨면) 두 번만 누르면 됨
+- **1.3.0 부터는 새 버전이 나오면 트레이 알림이 뜨고, [지금 업데이트] 한 번으로 설치됨** ([자세히](#새-버전-업데이트))
 
 ### 처음 실행할 때 경고가 뜨면
 
@@ -93,14 +95,43 @@ WinDeck 에 코드 서명 인증서가 없어서 **"알 수 없는 게시자"** 
   - 버튼 수를 줄여도 뒤쪽 버튼은 지우지 않고 숨겨서 보관 → 다시 늘리면 제자리. 줄일 때 "빈 칸으로 당기고 남으면 새 페이지로 옮기기"도 선택 가능
 - 배경: 기본·단색·이미지, 가로/세로 배치별 지정, 맞춤(채우기·맞추기·늘이기)·어둡게 조절. 이미지는 넣을 때 패널 크기로 줄여 저장
 - 투명도, 항상 위에 표시, 단축키로 열 때 마우스 커서 위치에 표시 (켜기/끄기)
-- 윈도우 시작 시 자동 실행
+- 윈도우 시작 시 자동 실행, 새 버전 자동 확인 (하루 한 번, 끄기 가능) · 지금 확인
 - 페이지 추가·이름 변경·삭제·순서 변경
-- 설정 내보내기(백업) / 불러오기 — 아이콘까지 `.json` 파일 하나에 저장, 다른 PC로 이동 가능
+- 설정 내보내기 / 불러오기 — 아이콘까지 `.json` 파일 하나에 저장, 다른 PC로 이동 가능
+- 자동 백업 목록과 "선택한 백업으로 되돌리기" (백업 탭)
 
 설정 파일 위치: `%APPDATA%\WinDeck\config.json` (포터블판은 exe 옆 `WinDeckData\config.json`)
-불러오기 직전 설정은 `%APPDATA%\WinDeck\backups\` 에 자동 보관.
 
 <img src="docs/images/settings.png" alt="설정 창" width="400"> <img src="docs/images/background.png" alt="사진 배경 12칸 패널" width="400">
+
+### 새 버전 업데이트
+
+- 하루 한 번 GitHub 에서 새 버전을 확인 → 트레이 알림 → 알림(또는 트레이 메뉴 "새 버전 설치…")을 누르면 바뀐 내용과 함께 업데이트 창 표시
+- **[지금 업데이트]**: 지금 설정을 저장·백업 → 파일 받기 → SHA-256 검사(릴리스의 검사 목록과 다르면 설치 안 함) → 설치 → WinDeck 다시 실행
+  - 설치판: 설치 파일을 조용히 실행 (같은 위치에 덮어 설치)
+  - 포터블판: `WinDeck.exe` 만 새 버전으로 교체, `WinDeckData` 설정 폴더는 그대로
+- [나중에]는 다음 날 다시 알림, [이 버전 건너뛰기]는 그 버전 알림만 끔. 설정 > 일반에서 자동 확인 끄기·지금 확인
+
+<img src="docs/images/update.png" alt="업데이트 창" width="460">
+
+### 설정 백업과 되돌리기
+
+업데이트 뒤나 실수로 버튼을 지운 뒤 예전 설정이 필요하면 **설정 > 백업 > 선택한 백업으로 되돌리기**.
+
+- 자동 백업 (최근 20개 보관): 하루 한 번, 설정 바꾸기·불러오기·되돌리기 직전, 업데이트 직전, 다른 곳에서 바뀐 설정 파일을 다시 읽기 직전
+- 실행 중에 설정 파일이 바뀌면(백업 파일로 교체, 다른 PC에서 복사 등) 자동으로 다시 읽음 — 예전 설정으로 덮어쓰지 않음
+- 포터블판을 새 폴더에 풀어 처음 실행하면 이전에 쓰던 설정(예전 포터블 폴더, 설치판 설정)을 찾아 불러올지 물어봄
+- 설치 파일·업데이트가 WinDeck 을 닫을 때는 설정을 먼저 저장하게 한 뒤 닫음
+
+<img src="docs/images/backup.png" alt="백업 탭" width="400">
+
+### 동료와 설정 나누기
+
+1. 설정 > 백업 > **설정 내보내기** → `.json` 파일을 메신저·메일로 전달
+2. 받은 사람: 설정 > 백업 > **설정 불러오기** (다운로드 폴더에서 열림), 또는 파일을 패널에 끌어다 놓기
+   - 불러온 내용은 WinDeck 설정에 저장되므로 받은 파일은 바탕 화면·다운로드 어디에 있어도 되고, 불러온 뒤 지워도 됨
+   - 불러오기 직전 내 설정은 자동 백업, 패널 위치는 내 PC 그대로
+3. 보낸 사람 PC 의 바탕 화면·다운로드·문서·사진 폴더 경로(`C:\Users\보낸사람\...`, OneDrive 포함)로 만든 버튼은 받은 사람 PC 의 같은 폴더로 열림
 
 ## 4. 알려진 제한
 
@@ -125,7 +156,9 @@ Windows에 내장된 C# 컴파일러(`csc.exe`, .NET Framework 4.8)로 `dist\Win
 powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1 -OutDir build\test-out
 ```
 
-`-TypeTest`(테스트 창에 실제 입력), `-E2E`(별도 창 + 실제 마우스 클릭) 옵션 추가 가능. 점검 중에는 마우스·키보드 조작 금지.
+`-TypeTest`(테스트 창에 실제 입력), `-E2E`(별도 창 + 실제 마우스 클릭), `-Actions`(탐색기·cmd 실제 실행), `-Process`(실제 WinDeck.exe 복사본으로 `--exit`·업데이트 창·가짜 99.0.0 릴리스로 포터블 업데이트 전 과정) 옵션 추가 가능. 점검 중에는 마우스·키보드 조작 금지.
+
+명령줄: `WinDeck.exe --exit` (실행 중인 WinDeck 을 설정 저장 후 종료, 끝나면 0), `WinDeck.exe --check-update` (바로 업데이트 확인).
 
 ## 6. 팀 배포
 
@@ -133,12 +166,13 @@ powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1 -OutDir build\test-
 release.bat
 ```
 
-`release\` 폴더에 두 파일 생성 (버전은 `src\AssemblyInfo.cs` 기준):
+`release\` 폴더에 세 파일 생성 (버전은 `src\AssemblyInfo.cs` 기준):
 
 | 파일 | 용도 |
 |---|---|
-| `WinDeck-Setup-1.0.0.exe` | 설치판. 관리자 권한 불필요, 사용자별 설치(`%LOCALAPPDATA%\Programs\WinDeck`), 시작 메뉴·바탕 화면 바로가기, 자동 실행 선택, Windows 설정 > 앱에서 제거 |
-| `WinDeck-Portable-1.0.0.zip` | 포터블판. 압축 해제 후 바로 실행, 설정은 같은 폴더의 `WinDeckData`에 저장 |
+| `WinDeck-Setup-1.3.0.exe` | 설치판. 관리자 권한 불필요, 사용자별 설치(`%LOCALAPPDATA%\Programs\WinDeck`), 시작 메뉴·바탕 화면 바로가기, 자동 실행 선택, Windows 설정 > 앱에서 제거 |
+| `WinDeck-Portable-1.3.0.zip` | 포터블판. 압축 해제 후 바로 실행, 설정은 같은 폴더의 `WinDeckData`에 저장 |
+| `WinDeck-SHA256-1.3.0.txt` | 두 파일의 SHA-256. **앱 안 자동 업데이트는 이 파일이 릴리스에 있어야 설치함** |
 
 팀원용 안내문 `WinDeck 사용 안내.txt` 가 두 패키지에 함께 들어감 (원본: `deploy\`).
 
@@ -147,17 +181,18 @@ release.bat
 2. 파일 이름을 `WinDeck.defaults.json` 으로 바꿔 `deploy\` 폴더에 넣기
 3. `release.bat` 다시 실행 → 팀원이 처음 실행할 때 이 버튼 구성으로 시작 (이후에는 각자 수정한 설정 사용)
 
-경로는 `%USERPROFILE%\Documents`, `\\서버\공유폴더` 처럼 누구 PC에서나 통하는 형태로 입력. `C:\Users\내이름\...` 경로는 동료 PC에 없음.
+경로는 `%USERPROFILE%\Documents`, `\\서버\공유폴더` 처럼 누구 PC에서나 통하는 형태로 입력하는 것이 가장 확실함. `C:\Users\내이름\` 아래의 바탕 화면·다운로드·문서·사진 폴더는 동료 PC 에서 그 사람의 같은 폴더로 자동으로 바꿔 열지만, 그 밖의 개인 폴더는 동료 PC 에 없을 수 있음.
 
-**업데이트 배포** (설치판을 덮어 설치하면 버튼 설정 유지, 실행 중인 WinDeck은 설치 중 자동 종료)
+**업데이트 배포** (설치판을 덮어 설치하면 버튼 설정 유지, 실행 중인 WinDeck 은 설정을 저장한 뒤 자동 종료)
 1. `src\AssemblyInfo.cs` 의 버전 숫자 변경, `CHANGELOG.md` 에 변경 내용 추가
 2. `release.bat` 실행 → 변경 사항 커밋 후 `git push`
-3. `release` 폴더에서 GitHub 릴리스 생성 (파일 이름만 쓸 것 — 전체 경로에 `#` 이 있으면 gh 가 표시 이름 구분자로 해석함)
+3. `release` 폴더에서 GitHub 릴리스 생성 — 세 파일 모두 올릴 것 (파일 이름만 쓸 것 — 전체 경로에 `#` 이 있으면 gh 가 표시 이름 구분자로 해석함)
 
 ```bash
-gh release create v1.0.1 WinDeck-Setup-1.0.1.exe WinDeck-Portable-1.0.1.zip --title "WinDeck 1.0.1" --notes "변경 내용"
+gh release create v1.3.1 WinDeck-Setup-1.3.1.exe WinDeck-Portable-1.3.1.zip WinDeck-SHA256-1.3.1.txt --title "WinDeck 1.3.1" --notes "변경 내용"
 ```
 
+1.3.0 이상을 쓰는 팀원은 하루 안에 트레이 알림을 받고 한 번 눌러 업데이트함. 릴리스 설명(notes)이 업데이트 창에 그대로 표시됨.
 팀원 다운로드 주소는 항상 같음: <https://github.com/musiqsb-svg/WinDeck/releases/latest>
 
 **보안 경고**: 코드 서명 인증서가 없어 처음 실행 시 "Windows의 PC 보호" 창 표시 → [추가 정보] → [실행]. 일부 백신이 키 입력 기능 때문에 의심할 수 있음 — 사내 배포 시 IT 담당자에게 예외 등록 요청.
@@ -166,14 +201,15 @@ gh release create v1.0.1 WinDeck-Setup-1.0.1.exe WinDeck-Portable-1.0.1.zip --ti
 
 | 경로 | 내용 |
 |---|---|
-| `src\Program.cs` | 시작점, 중복 실행 방지 |
+| `src\Program.cs`, `src\AppInstance.cs` | 시작점, 중복 실행 방지, 보이기·종료·업데이트 확인 신호 (`--exit`, `--check-update`) |
+| `src\Updater.cs`, `src\UpdateForm.cs` | 새 버전 확인·받기·SHA-256 검사·설치, 업데이트 창 |
 | `src\DeckForm.cs` | 버튼 패널 (포커스 없는 창, 단축키, 트레이, 툴팁, 끌어놓기) |
 | `src\ButtonEditForm.cs` | 버튼 편집창 |
 | `src\SettingsForm.cs` | 설정창 |
 | `src\ActionRunner.cs` | 폴더·링크·실행·문장·단축키 동작 실행 |
 | `src\InputSender.cs` | 키 입력 전송 (SendInput, 붙여넣기) |
 | `src\KeyCombo.cs` | 단축키 문자열 해석 |
-| `src\Models.cs`, `src\ConfigStore.cs` | 설정 구조·저장·백업 |
+| `src\Models.cs`, `src\ConfigStore.cs` | 설정 구조·저장, 바뀐 파일 감지, 자동 백업, 이전 설정 찾기 |
 | `src\KeyRenderer.cs`, `src\Controls.cs`, `src\Theme.cs` | 버튼 그리기·화면 요소 |
 | `src\IconCache.cs`, `src\AppIcon.cs` | 버튼 아이콘, 프로그램 아이콘 |
 | `src\Helpers.cs` | 자동 실행, 백업 대화상자, 폴더 선택창, 오류 기록 |

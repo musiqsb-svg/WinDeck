@@ -110,35 +110,43 @@ namespace WinDeck
             }
         }
 
-        /// <summary>파일을 골라 읽고, 확인을 받은 뒤 현재 설정을 자동 백업한다. 취소하면 null.</summary>
-        public static AppConfig Import(IWin32Window owner, AppConfig current)
+        /// <summary>
+        /// 불러올 설정 파일을 고른다. 받은 파일은 대개 다운로드·바탕 화면에 있으므로 마지막으로 연 폴더, 없으면 다운로드에서 시작한다.
+        /// </summary>
+        public static string PickImportFile(IWin32Window owner, string lastFolder)
         {
             using (var ofd = new OpenFileDialog())
             {
                 ofd.Title = "설정 불러오기";
                 ofd.Filter = Filter;
-                ofd.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                if (ofd.ShowDialog(owner) != DialogResult.OK) return null;
-
-                AppConfig imported;
-                try
-                {
-                    imported = ConfigStore.Import(ofd.FileName);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(owner, "설정 파일을 읽지 못했습니다.\n" + ex.Message, "WinDeck", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return null;
-                }
-
-                string msg = "현재 버튼 설정을 불러온 파일의 내용으로 바꿉니다.\n"
-                    + "(페이지 " + imported.Pages.Count + "개)\n\n지금 설정은 자동으로 백업해 둡니다. 계속할까요?";
-                if (MessageBox.Show(owner, msg, "설정 불러오기", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-                    return null;
-                try { ConfigStore.AutoBackup(current, "before_import"); }
-                catch (Exception) { }
-                return imported;
+                string start = !string.IsNullOrEmpty(lastFolder) && Directory.Exists(lastFolder) ? lastFolder : KnownFolders.Downloads;
+                if (string.IsNullOrEmpty(start) || !Directory.Exists(start))
+                    start = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                ofd.InitialDirectory = start;
+                return ofd.ShowDialog(owner) == DialogResult.OK ? ofd.FileName : null;
             }
+        }
+
+        /// <summary>설정 파일을 읽고 (confirm 이면) 바꿀지 묻는다. 못 읽거나 취소하면 null. 백업은 부르는 쪽에서 한다.</summary>
+        public static AppConfig ReadImport(IWin32Window owner, string path, bool confirm)
+        {
+            AppConfig imported;
+            try
+            {
+                imported = ConfigStore.Import(path);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(owner, "설정 파일을 읽지 못했습니다.\n" + ex.Message, "WinDeck", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return null;
+            }
+            if (!confirm) return imported;
+            string msg = "현재 버튼 설정을 불러온 파일의 내용으로 바꿉니다.\n"
+                + Path.GetFileName(path) + "  (" + ConfigStore.Describe(imported) + ")\n\n"
+                + "지금 설정은 자동으로 백업해 둡니다. 불러온 내용은 WinDeck 에 저장되므로 받은 파일은 나중에 지워도 됩니다.\n계속할까요?";
+            if (MessageBox.Show(owner, msg, "설정 불러오기", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return null;
+            return imported;
         }
     }
 

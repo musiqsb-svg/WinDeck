@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -30,15 +31,24 @@ namespace WinDeck
         bool loadingBg;
         TrackBar trkOpacity;
         Label lblOpacity;
-        CheckBox chkTopMost, chkShowAtCursor, chkAutoStart;
+        CheckBox chkTopMost, chkShowAtCursor, chkAutoStart, chkAutoUpdate;
+        Button btnCheckNow;
+        Label lblUpdate;
         ListBox lstPages, lstHotkeys;
+        ListView lstBackups;
+        bool backupsLoaded;
 
         public AppConfig Result { get; private set; }
         public bool AutoStartEnabled { get; private set; }
+        /// <summary>확인 시 적용 전 설정을 어떤 이름으로 백업할지 (설정 변경·불러오기·되돌리기).</summary>
+        public string BackupReason { get; private set; }
+        /// <summary>[지금 확인]에서 새 버전을 찾고 설치를 고른 경우 그 정보 (설정 창을 닫은 뒤 업데이트 창을 연다).</summary>
+        public UpdateInfo UpdateRequested { get; private set; }
 
         public SettingsForm(AppConfig workingCopy, bool autoStart)
         {
             working = workingCopy;
+            BackupReason = "before_settings";
             originalCount = workingCopy.ButtonCount;
             AutoStartEnabled = autoStart;
             BuildUi();
@@ -49,6 +59,13 @@ namespace WinDeck
         public int InitialTab
         {
             set { tabs.SelectedIndex = Math.Max(0, Math.Min(tabs.TabCount - 1, value)); }
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            // 창을 만들기 전에 고른 탭은 SelectedIndexChanged 가 오지 않으므로 여기서 채운다.
+            if (tabs.SelectedTab == tabBackup && !backupsLoaded) RefreshBackups();
         }
 
         void BuildUi()
@@ -118,6 +135,15 @@ namespace WinDeck
             tips.SetToolTip(chkShowAtCursor, "보이기/숨기기·페이지 단축키로 패널을 열 때 마우스가 있는 곳에 띄웁니다.");
             tips.SetToolTip(cboCount, "줄여도 뒤쪽 버튼은 지우지 않고 숨겨서 보관합니다. 다시 늘리면 제자리에 나타납니다.");
 
+            chkAutoUpdate = new CheckBox { Text = "새 버전 자동 확인 (하루 한 번)", AutoSize = true, Location = new Point(12, 284) };
+            btnCheckNow = new Button { Text = "지금 확인", Location = new Point(310, 280), Size = new Size(100, 26) };
+            lblUpdate = new Label { AutoSize = false, AutoEllipsis = true, Location = new Point(30, 306), Size = new Size(380, 18), ForeColor = SystemColors.GrayText };
+            btnCheckNow.Click += delegate { CheckUpdateNow(); };
+            tabGeneral.Controls.Add(chkAutoUpdate);
+            tabGeneral.Controls.Add(btnCheckNow);
+            tabGeneral.Controls.Add(lblUpdate);
+            tips.SetToolTip(chkAutoUpdate, "새 버전이 나오면 트레이 알림으로 알려 줍니다. 설치는 알림을 눌러 직접 고릅니다.");
+
             BuildBackgroundTab(tips);
 
             // ---- 단축키
@@ -144,21 +170,59 @@ namespace WinDeck
             AddSideButton("아래로 ▼", 182, delegate { MovePage(1); });
 
             // ---- 백업
-            AddHint(tabBackup, "모든 페이지·버튼·아이콘·단축키를 .json 파일 하나로 저장하거나 불러옵니다.\n다른 PC로 옮기거나 동료와 버튼 구성을 나눌 때 씁니다.", 12, 14);
-            var btnExport = new Button { Text = "설정 내보내기 (백업)…", Location = new Point(12, 58), Size = new Size(398, 32) };
-            var btnImport = new Button { Text = "설정 불러오기…", Location = new Point(12, 98), Size = new Size(398, 32) };
+            AddHint(tabBackup, "모든 페이지·버튼·아이콘·단축키를 .json 파일 하나로 저장하거나 불러옵니다.\n"
+                + "받은 파일은 바탕 화면 등 어디에 있어도 되고, 불러온 뒤 지워도 됩니다.", 12, 10);
+            var btnExport = new Button { Text = "설정 내보내기…", Location = new Point(12, 46), Size = new Size(197, 30) };
+            var btnImport = new Button { Text = "설정 불러오기…", Location = new Point(213, 46), Size = new Size(197, 30) };
             btnExport.Click += delegate { CollectValues(); BackupUi.Export(this, working); };
             btnImport.Click += delegate { ImportConfig(); };
             tabBackup.Controls.Add(btnExport);
             tabBackup.Controls.Add(btnImport);
-            var link = new LinkLabel { Text = "설정 파일 폴더 열기", AutoSize = true, Location = new Point(12, 146) };
-            link.LinkClicked += delegate
+
+            AddLabel(tabBackup, "자동 백업 (최근 " + ConfigStore.MaxBackups + "개 보관)", 12, 88);
+            lstBackups = new ListView
+            {
+                View = View.Details,
+                FullRowSelect = true,
+                MultiSelect = false,
+                HideSelection = false,
+                HeaderStyle = ColumnHeaderStyle.Nonclickable,
+                Location = new Point(12, 108),
+                Size = new Size(398, 140)
+            };
+            // ListView 열 너비에는 DPI 배율이 자동으로 적용되지 않는다.
+            float dpi;
+            using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) dpi = g.DpiX / 96f;
+            lstBackups.Columns.Add("백업한 때", (int)(128 * dpi));
+            lstBackups.Columns.Add("이유", (int)(132 * dpi));
+            lstBackups.Columns.Add("내용", (int)(114 * dpi));
+            lstBackups.DoubleClick += delegate { RestoreBackup(); };
+            tabBackup.Controls.Add(lstBackups);
+            var btnRestore = new Button { Text = "선택한 백업으로 되돌리기…", Location = new Point(12, 254), Size = new Size(197, 28) };
+            var btnBackupNow = new Button { Text = "지금 백업", Location = new Point(213, 254), Size = new Size(96, 28) };
+            var btnFolder = new Button { Text = "폴더 열기", Location = new Point(313, 254), Size = new Size(97, 28) };
+            btnRestore.Click += delegate { RestoreBackup(); };
+            btnBackupNow.Click += delegate { BackupNow(); };
+            btnFolder.Click += delegate
             {
                 try { Process.Start("explorer.exe", "\"" + ConfigStore.Dir + "\""); }
                 catch (Exception) { }
             };
-            tabBackup.Controls.Add(link);
-            AddHint(tabBackup, ConfigStore.Dir, 12, 170);
+            tabBackup.Controls.Add(btnRestore);
+            tabBackup.Controls.Add(btnBackupNow);
+            tabBackup.Controls.Add(btnFolder);
+            var lblDir = new Label
+            {
+                Text = "설정 위치: " + ConfigStore.Dir,
+                AutoSize = false,
+                AutoEllipsis = true,
+                Location = new Point(12, 292),
+                Size = new Size(398, 18),
+                ForeColor = SystemColors.GrayText
+            };
+            tips.SetToolTip(lblDir, ConfigStore.Dir);
+            tabBackup.Controls.Add(lblDir);
+            tabs.SelectedIndexChanged += delegate { if (tabs.SelectedTab == tabBackup && !backupsLoaded) RefreshBackups(); };
 
             var ok = new Button { Text = "확인", Location = new Point(256, 378), Size = new Size(92, 30) };
             var cancel = new Button { Text = "취소", Location = new Point(352, 378), Size = new Size(92, 30), DialogResult = DialogResult.Cancel };
@@ -230,6 +294,8 @@ namespace WinDeck
             cboBgTarget.SelectedIndex = working.Vertical ? 1 : 0;
             LoadBgControls();
             chkAutoStart.Checked = AutoStartEnabled;
+            chkAutoUpdate.Checked = working.AutoUpdateCheck;
+            lblUpdate.Text = "지금 v" + AppInfo.Version + LastCheckText();
             RefreshPages(working.CurrentPage);
             RefreshHotkeyOverview();
         }
@@ -571,16 +637,129 @@ namespace WinDeck
 
         void ImportConfig()
         {
-            AppConfig imported = BackupUi.Import(this, working);
+            string path = BackupUi.PickImportFile(this, working.LastImportFolder);
+            if (path == null) return;
+            AppConfig imported = BackupUi.ReadImport(this, path, true);
             if (imported == null) return;
-            imported.HasPosition = working.HasPosition;
-            imported.WindowX = working.WindowX;
-            imported.WindowY = working.WindowY;
-            working = imported;
+            ConfigStore.KeepLocalState(working, imported);
+            imported.LastImportFolder = Path.GetDirectoryName(path);
+            FinishWith(imported, "before_import");
+        }
+
+        /// <summary>불러오기·되돌리기: 다른 탭의 변경 내용 대신 그 설정으로 바로 닫는다 (적용 전 설정은 백업됨).</summary>
+        void FinishWith(AppConfig replacement, string reason)
+        {
+            working = replacement;
             AutoStartEnabled = chkAutoStart.Checked;
             Result = working;
+            BackupReason = reason;
             DialogResult = DialogResult.OK;
             Close();
+        }
+
+        void RefreshBackups()
+        {
+            backupsLoaded = true;
+            lstBackups.BeginUpdate();
+            lstBackups.Items.Clear();
+            foreach (BackupInfo b in ConfigStore.ListBackups())
+            {
+                string summary;
+                try { summary = ConfigStore.Describe(ConfigStore.Import(b.Path)).Replace("개", ""); }
+                catch (Exception) { summary = "(읽을 수 없음)"; }
+                var item = new ListViewItem(new[] { b.Time.ToString("yyyy-MM-dd HH:mm"), b.ReasonText, summary }) { Tag = b };
+                lstBackups.Items.Add(item);
+            }
+            lstBackups.EndUpdate();
+            if (lstBackups.Items.Count == 0) lstBackups.Items.Add(new ListViewItem(new[] { "아직 백업이 없습니다", "", "" }));
+        }
+
+        void RestoreBackup()
+        {
+            BackupInfo b = lstBackups.SelectedItems.Count == 0 ? null : lstBackups.SelectedItems[0].Tag as BackupInfo;
+            if (b == null)
+            {
+                MessageBox.Show(this, "되돌릴 백업을 목록에서 고르세요.", "WinDeck", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            AppConfig restored;
+            try
+            {
+                restored = ConfigStore.Import(b.Path);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "백업 파일을 읽지 못했습니다.\n" + ex.Message, "WinDeck", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            string msg = b.Time.ToString("yyyy-MM-dd HH:mm") + " (" + b.ReasonText + ") 백업으로 되돌릴까요?\n"
+                + ConfigStore.Describe(restored) + "\n\n지금 설정은 자동으로 백업해 둡니다.";
+            if (MessageBox.Show(this, msg, "이전 설정으로 되돌리기", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            ConfigStore.KeepLocalState(working, restored);
+            FinishWith(restored, "before_restore");
+        }
+
+        void BackupNow()
+        {
+            CollectValues();
+            try
+            {
+                ConfigStore.AutoBackup(working, "manual");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "백업하지 못했습니다.\n" + ex.Message, "WinDeck", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            RefreshBackups();
+            if (lstBackups.Items.Count > 0) lstBackups.Items[0].Selected = true;
+        }
+
+        // ------------------------------------------------------------------ update
+
+        string LastCheckText()
+        {
+            DateTime last;
+            if (!DateTime.TryParse(working.LastUpdateCheck, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out last)) return "";
+            return " · 마지막 확인 " + last.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+        }
+
+        void CheckUpdateNow()
+        {
+            btnCheckNow.Enabled = false;
+            lblUpdate.Text = "확인 중…";
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                UpdateInfo info = null;
+                Exception error = null;
+                try { info = Updater.FetchLatest(); }
+                catch (Exception ex) { error = ex; }
+                try { BeginInvoke(new Action(delegate { OnUpdateChecked(info, error); })); }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        void OnUpdateChecked(UpdateInfo info, Exception error)
+        {
+            if (IsDisposed) return;
+            btnCheckNow.Enabled = true;
+            if (error != null)
+            {
+                lblUpdate.Text = "확인하지 못했습니다: " + Updater.Describe(error);
+                return;
+            }
+            working.LastUpdateCheck = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+            if (!Updater.IsNewer(info.Version, AppInfo.Version))
+            {
+                lblUpdate.Text = "최신 버전입니다 (v" + AppInfo.Version + ")";
+                return;
+            }
+            lblUpdate.Text = "새 버전 v" + info.Version + " 이 있습니다.";
+            if (MessageBox.Show(this, "새 버전 v" + info.Version + " 이 있습니다.\n설정 창의 변경 내용을 저장하고 업데이트 창을 열까요?",
+                    "WinDeck 업데이트", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes) return;
+            UpdateRequested = info;
+            Accept();
         }
 
         void CollectValues()
@@ -593,6 +772,7 @@ namespace WinDeck
             working.ShowAtCursor = chkShowAtCursor.Checked;
             working.ButtonCount = SelectedCount;
             working.BackgroundVSameAsH = chkBgSame.Checked;
+            working.AutoUpdateCheck = chkAutoUpdate.Checked;
             AutoStartEnabled = chkAutoStart.Checked;
         }
 

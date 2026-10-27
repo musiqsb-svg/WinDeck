@@ -59,13 +59,57 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "WinDeck 실행"; Flags: nowait postinstall skipifsilent
+; 앱 안의 자동 업데이트가 /SILENT /RELAUNCH=1 로 실행했을 때: 설치가 끝나면 WinDeck 을 다시 켠다.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: IsRelaunch
 
 [Code]
+const
+  EVENT_MODIFY_STATE = $0002;
+
+function OpenEvent(dwDesiredAccess: Cardinal; bInheritHandle: Integer; lpName: String): Cardinal;
+  external 'OpenEventW@kernel32.dll stdcall';
+function SetEvent(hEvent: Cardinal): Integer;
+  external 'SetEvent@kernel32.dll stdcall';
+function CloseHandle(hObject: Cardinal): Integer;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+{ 앱(src\AppInstance.cs)과 같은 이름. 점검 때는 /INSTANCE=이름 으로 뒤에 붙는 이름을 바꾼다. }
+function NameSuffix: String;
+begin
+  Result := ExpandConstant('{param:INSTANCE|}');
+  if Result <> '' then Result := '.' + Result;
+end;
+
+function IsRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
+
 procedure CloseWinDeck;
 var
-  ResultCode: Integer;
+  ResultCode, i: Integer;
+  Handle: Cardinal;
+  MutexName: String;
 begin
-  { 실행 중이면 파일을 덮어쓸 수 없으므로 먼저 종료한다. 버튼 설정은 바뀔 때마다 저장되어 있다. }
+  MutexName := 'Local\WinDeck.SingleInstance' + NameSuffix;
+  if not CheckForMutexes(MutexName) then Exit;
+  { 1.3 이상: 종료 신호를 받으면 설정을 저장하고 스스로 끝난다. 최대 5초 기다린다. }
+  Handle := OpenEvent(EVENT_MODIFY_STATE, 0, 'Local\WinDeck.Exit' + NameSuffix);
+  if Handle <> 0 then
+  begin
+    SetEvent(Handle);
+    CloseHandle(Handle);
+    for i := 1 to 50 do
+    begin
+      if not CheckForMutexes(MutexName) then
+      begin
+        Sleep(300);
+        Exit;
+      end;
+      Sleep(100);
+    end;
+  end;
+  { 응답이 없거나 1.2 이하 버전이면 강제로 끝낸다. 버튼 설정은 바뀔 때마다 이미 저장되어 있다. }
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#AppExe}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   if ResultCode = 0 then Sleep(500);
 end;

@@ -32,13 +32,18 @@ if (Test-Path (Join-Path $iconDir 'manifest.tsv')) {
 $exe = Join-Path $dist 'WinDeck.exe'
 $running = @(Get-Process WinDeck -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
 if ($running.Count -gt 0) {
-    Write-Host 'Closing running dist\WinDeck.exe for rebuild...'
-    $running | Stop-Process -Force
-    Start-Sleep -Milliseconds 500
+    Write-Host 'Closing running dist\WinDeck.exe for rebuild (saving settings first)...'
+    # 1.3+ : the exit signal makes WinDeck save its settings and quit by itself. Force-kill only if it does not.
+    try { ([Threading.EventWaitHandle]::OpenExisting('Local\WinDeck.Exit')).Set() | Out-Null } catch { }
+    $running | Wait-Process -Timeout 6 -ErrorAction SilentlyContinue
+    $still = @($running | Where-Object { -not $_.HasExited })
+    if ($still.Count -gt 0) { $still | Stop-Process -Force }
+    Start-Sleep -Milliseconds 300
 }
 & $csc /nologo /codepage:65001 /target:winexe /optimize+ /platform:anycpu `
     "/out:$exe" "/win32icon:$ico" "/win32manifest:$(Join-Path $root 'app.manifest')" `
     /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
+    /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
     $resources $sources
 $compileExit = $LASTEXITCODE
 if ($running.Count -gt 0) { Start-Process $exe }

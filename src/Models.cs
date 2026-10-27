@@ -196,6 +196,16 @@ namespace WinDeck
         /// <summary>최근 고른 색 (#RRGGBB, 최신순 최대 8개).</summary>
         public List<string> RecentColors { get; set; }
         public List<DeckPage> Pages { get; set; }
+        /// <summary>이 파일을 마지막으로 저장한 WinDeck 버전 (업데이트 직후 자동 백업용).</summary>
+        public string SavedByVersion { get; set; }
+        /// <summary>하루 한 번 GitHub 에서 새 버전을 확인한다.</summary>
+        public bool AutoUpdateCheck { get; set; }
+        /// <summary>마지막 업데이트 확인 시각 (UTC, ISO 8601).</summary>
+        public string LastUpdateCheck { get; set; }
+        /// <summary>'이 버전 건너뛰기'로 알림을 끈 버전.</summary>
+        public string SkippedUpdateVersion { get; set; }
+        /// <summary>설정 불러오기 창을 마지막으로 연 폴더.</summary>
+        public string LastImportFolder { get; set; }
 
         public AppConfig()
         {
@@ -213,6 +223,7 @@ namespace WinDeck
             CustomColors = new List<int>();
             RecentColors = new List<string>();
             Pages = new List<DeckPage>();
+            AutoUpdateCheck = true;
         }
 
         /// <summary>지금 배치(가로/세로)에 쓰는 배경.</summary>

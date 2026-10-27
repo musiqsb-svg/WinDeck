@@ -12,8 +12,8 @@ using System.Windows.Forms;
 using WinDeck;
 
 // WinDeck 자동 점검. 실제 사용자 설정은 건드리지 않도록 ConfigStore.Dir 를 출력 폴더로 돌린다.
-//   SmokeTest.exe <outDir> [--input] [--e2e]
-static class SmokeTest
+//   SmokeTest.exe <outDir> [--input] [--e2e] [--actions] [--process <fake release dir>]
+static partial class SmokeTest
 {
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
@@ -62,6 +62,7 @@ static class SmokeTest
 
         outDir = args[0];
         Directory.CreateDirectory(outDir);
+        string realSettings = RealSettingsFingerprint();
         ConfigStore.Dir = Path.Combine(outDir, "cfg");
         if (Directory.Exists(ConfigStore.Dir)) Directory.Delete(ConfigStore.Dir, true);
 
@@ -78,9 +79,13 @@ static class SmokeTest
         TestV12();
         TestV12Render();
         TestFinalQa();
+        TestV13();
         if (args.Contains("--actions")) TestRealActions();
         if (args.Contains("--input")) TestInput();
         if (args.Contains("--e2e")) TestEndToEnd();
+        int proc = Array.IndexOf(args, "--process");
+        if (proc >= 0 && proc + 1 < args.Length) TestProcesses(args[proc + 1]);
+        Check(RealSettingsFingerprint() == realSettings, "user's real settings (%APPDATA%\\WinDeck) untouched by the tests");
 
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails;

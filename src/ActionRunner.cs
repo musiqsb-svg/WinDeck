@@ -85,7 +85,47 @@ namespace WinDeck
 
         public static string ExpandPath(string target)
         {
-            return Environment.ExpandEnvironmentVariables((target ?? "").Trim().Trim('"'));
+            return RemapUserPath(Environment.ExpandEnvironmentVariables((target ?? "").Trim().Trim('"')));
+        }
+
+        // 사용자 폴더 안의 알려진 폴더 (OneDrive 로 옮겨진 경우, 한글 이름 포함)
+        static readonly Regex DesktopPart = new Regex(@"^(?:OneDrive(?: - [^\\]+)?\\)?(?:Desktop|바탕 화면)(?=\\|$)", RegexOptions.IgnoreCase);
+        static readonly Regex DocumentsPart = new Regex(@"^(?:OneDrive(?: - [^\\]+)?\\)?(?:Documents|문서)(?=\\|$)", RegexOptions.IgnoreCase);
+        static readonly Regex PicturesPart = new Regex(@"^(?:OneDrive(?: - [^\\]+)?\\)?(?:Pictures|사진)(?=\\|$)", RegexOptions.IgnoreCase);
+        static readonly Regex DownloadsPart = new Regex(@"^(?:Downloads|다운로드)(?=\\|$)", RegexOptions.IgnoreCase);
+        static readonly Regex ProfilePrefix = new Regex(@"^[A-Za-z]:\\Users\\[^\\]+(?:\\|$)", RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// 다른 PC·다른 사용자에게서 받은 설정의 경로(C:\Users\다른이름\바탕 화면\...)를 이 PC의 같은 폴더로 바꿔 본다.
+        /// 원래 경로가 있으면 그대로, 바꾼 경로도 없으면 원래 경로를 돌려준다.
+        /// </summary>
+        public static string RemapUserPath(string path)
+        {
+            try
+            {
+                if (path.Length < 4 || !Path.IsPathRooted(path) || File.Exists(path) || Directory.Exists(path)) return path;
+                Match m = ProfilePrefix.Match(path);
+                if (!m.Success) return path;
+                string rest = path.Substring(m.Length);
+                var known = new[]
+                {
+                    Tuple.Create(DesktopPart, Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)),
+                    Tuple.Create(DownloadsPart, KnownFolders.Downloads),
+                    Tuple.Create(DocumentsPart, Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)),
+                    Tuple.Create(PicturesPart, Environment.GetFolderPath(Environment.SpecialFolder.MyPictures))
+                };
+                foreach (var k in known)
+                {
+                    Match km = k.Item1.Match(rest);
+                    if (!km.Success || string.IsNullOrEmpty(k.Item2)) continue;
+                    string candidate = Path.Combine(k.Item2, rest.Substring(km.Length).TrimStart('\\'));
+                    if (File.Exists(candidate) || Directory.Exists(candidate)) return candidate;
+                }
+                string other = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), rest);
+                if (rest.Length > 0 && (File.Exists(other) || Directory.Exists(other))) return other;
+            }
+            catch (Exception) { }
+            return path;
         }
 
         static void OpenFolder(string target)

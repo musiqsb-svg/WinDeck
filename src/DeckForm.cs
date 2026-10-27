@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -43,6 +44,12 @@ namespace WinDeck
         Point dragCursor, dragOrigin;
         int wheelAccum;
         bool exiting, hideHintShown, dialogOpen, dwmBorder;
+        FileSystemWatcher watcher;
+        readonly Timer reloadTimer, maintenanceTimer;
+        ToolStripMenuItem trayUpdateItem;
+        UpdateInfo pendingUpdate;
+        bool updateChecking, balloonIsUpdate;
+        int exitAttempts;
 
         public DeckForm(AppConfig config, bool systemHooks)
         {
@@ -107,7 +114,29 @@ namespace WinDeck
                 RunPendingButton();
             };
 
+            // 다른 곳(사용자, 다른 WinDeck)에서 config.json 이 바뀌면 잠시 뒤 다시 읽는다.
+            reloadTimer = new Timer { Interval = 500 };
+            reloadTimer.Tick += delegate
+            {
+                if (dialogOpen) return; // 대화상자를 닫은 뒤 다시 확인
+                reloadTimer.Stop();
+                SyncFromDisk();
+            };
+
+            // 하루 백업, 하루 한 번 업데이트 확인 (시작 1분 뒤, 그 뒤로 한 시간마다 점검)
+            maintenanceTimer = new Timer { Interval = 60 * 1000 };
+            maintenanceTimer.Tick += delegate
+            {
+                maintenanceTimer.Interval = 60 * 60 * 1000;
+                DoMaintenance();
+            };
+
             ApplyConfig(true);
+            if (systemHooks)
+            {
+                StartConfigWatcher();
+                maintenanceTimer.Start();
+            }
         }
 
         public AppConfig Config
@@ -189,11 +218,20 @@ namespace WinDeck
             {
                 ShowWarning(ConfigStore.LoadWarning);
             }
+            else if (ConfigStore.Previous != null)
+            {
+                OfferPreviousConfig(ConfigStore.Previous);
+            }
             else if (ConfigStore.IsNew)
             {
-                tray.ShowBalloonTip(8000, "WinDeck 이 실행되었습니다",
+                Balloon(8000, "WinDeck 이 실행되었습니다",
                     "버튼 클릭: 실행 · 우클릭: 편집 · 빈 칸에 파일/폴더/링크 끌어놓기\n"
                     + HotkeyText + " 로 패널을 숨기거나 다시 열 수 있습니다.", ToolTipIcon.Info);
+            }
+            else if (ConfigStore.UpgradedFrom != null)
+            {
+                Balloon(6000, "WinDeck v" + AppInfo.Version + " 로 업데이트되었습니다",
+                    "버튼과 설정은 그대로입니다. 업데이트 전 설정은 [설정 > 백업]에 보관해 두었습니다.", ToolTipIcon.Info);
             }
         }
 
@@ -214,6 +252,9 @@ namespace WinDeck
             {
                 foregroundTimer.Dispose();
                 modifierTimer.Dispose();
+                reloadTimer.Dispose();
+                maintenanceTimer.Dispose();
+                if (watcher != null) watcher.Dispose();
                 if (bgCache != null) bgCache.Dispose();
                 if (tray != null) tray.Dispose();
             }
@@ -431,6 +472,7 @@ namespace WinDeck
 
         void SavePosition()
         {
+            SyncFromDisk();
             cfg.WindowX = Left;
             cfg.WindowY = Top;
             cfg.HasPosition = true;
@@ -441,6 +483,7 @@ namespace WinDeck
 
         public bool GoToPage(string pageId)
         {
+            SyncFromDisk();
             int idx = cfg.Pages.FindIndex(p => p.Id == pageId);
             if (idx < 0) return false;
             cfg.CurrentPage = idx;
@@ -451,6 +494,7 @@ namespace WinDeck
 
         void ChangePage(int delta)
         {
+            SyncFromDisk();
             int n = cfg.Pages.Count;
             if (n <= 1) return;
             cfg.CurrentPage = ((cfg.CurrentPage + delta) % n + n) % n;
@@ -462,6 +506,7 @@ namespace WinDeck
         {
             string name = AskText("페이지 추가", "새 페이지 이름", "페이지 " + (cfg.Pages.Count + 1));
             if (name == null) return;
+            SyncFromDisk();
             cfg.Pages.Add(DeckPage.CreateEmpty(name));
             cfg.CurrentPage = cfg.Pages.Count - 1;
             ConfigChanged();
@@ -469,9 +514,14 @@ namespace WinDeck
 
         void RenamePage()
         {
+            SyncFromDisk();
+            string pageId = CurrentPage.Id;
             string name = AskText("페이지 이름 변경", "페이지 이름", CurrentPage.Name);
             if (name == null) return;
-            CurrentPage.Name = name;
+            SyncFromDisk();
+            DeckPage page = cfg.Pages.Find(p => p.Id == pageId);
+            if (page == null) return;
+            page.Name = name;
             ConfigChanged();
         }
 
@@ -526,14 +576,24 @@ namespace WinDeck
         public void EditKey(int index)
         {
             if (dialogOpen) return;
+            SyncFromDisk();
             dialogOpen = true;
             try
             {
                 DeckPage page = CurrentPage;
+                string pageId = page.Id;
                 using (var f = new ButtonEditForm(page.Buttons[index].Clone(), cfg, cfg.Pages.IndexOf(page), index))
                 {
                     if (f.ShowDialog(this) != DialogResult.OK) return;
-                    page.Buttons[index] = f.Result;
+                    // 편집하는 사이 설정 파일이 바뀌었으면 다시 읽은 설정에 이 버튼만 넣는다.
+                    SyncFromDisk();
+                    DeckPage target = cfg.Pages.Find(p => p.Id == pageId);
+                    if (target == null)
+                    {
+                        ShowWarning("편집하던 페이지가 다른 곳에서 삭제되어 버튼을 저장하지 못했습니다.");
+                        return;
+                    }
+                    target.Buttons[index] = f.Result;
                     ConfigChanged();
                     keys[index].Flash(Theme.Accent);
                 }
@@ -599,6 +659,7 @@ namespace WinDeck
         {
             if (k == null || copiedButton == null) return;
             if (!ConfirmReplace(k.Data, "붙여넣은 버튼")) return;
+            SyncFromDisk();
             DeckButton pasted = copiedButton.Clone();
             pasted.Hotkey = ""; // 같은 단축키가 두 버튼에 걸리지 않도록 복사본에는 단축키를 넣지 않는다
             CurrentPage.Buttons[k.Index] = pasted;
@@ -612,6 +673,7 @@ namespace WinDeck
             string name = string.IsNullOrWhiteSpace(k.Data.Title) ? "이" : "'" + k.Data.Title + "'";
             if (MessageBox.Show(this, name + " 버튼을 비울까요?", "WinDeck", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 return;
+            SyncFromDisk();
             CurrentPage.Buttons[k.Index] = new DeckButton();
             ConfigChanged();
         }
@@ -642,10 +704,26 @@ namespace WinDeck
             var k = (DeckKey)sender;
             DeckButton b = ButtonFromDrop(e.Data);
             if (b == null) return;
+            var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+            string json = files != null && files.Length == 1 && files[0].EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? files[0] : null;
             // 끌어온 프로그램이 응답을 기다리지 않도록 확인 창은 드롭이 끝난 뒤에 띄운다.
             BeginInvoke(new Action(delegate
             {
+                // 받은 설정 파일(.json)을 패널에 끌어놓으면 버튼 대신 설정 불러오기를 권한다.
+                if (json != null && ConfigStore.LooksLikeConfigFile(json))
+                {
+                    DialogResult r = MessageBox.Show(this, "'" + Path.GetFileName(json) + "' 은(는) WinDeck 설정 파일입니다.\n\n"
+                        + "[예]  이 설정 불러오기 (지금 설정은 자동으로 백업)\n[아니요]  이 파일을 여는 버튼 만들기",
+                        "WinDeck", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                    if (r == DialogResult.Yes)
+                    {
+                        ImportFile(json, false);
+                        return;
+                    }
+                    if (r != DialogResult.No) return;
+                }
                 if (!ConfirmReplace(k.Data, "'" + b.Title + "'")) return;
+                SyncFromDisk();
                 CurrentPage.Buttons[k.Index] = b;
                 ConfigChanged();
                 k.Flash(Theme.Accent);
@@ -895,6 +973,7 @@ namespace WinDeck
                     RevealPanel();
                     break;
                 case HotkeyKind.Page:
+                    SyncFromDisk();
                     if (entry.PageIndex >= 0 && entry.PageIndex < cfg.Pages.Count && entry.PageIndex != cfg.CurrentPage)
                     {
                         cfg.CurrentPage = entry.PageIndex;
@@ -929,7 +1008,7 @@ namespace WinDeck
             if (!hideHintShown && tray != null)
             {
                 hideHintShown = true;
-                tray.ShowBalloonTip(4000, "WinDeck 은 계속 실행 중입니다",
+                Balloon(4000, "WinDeck 은 계속 실행 중입니다",
                     HotkeyText + " 를 누르거나 트레이 아이콘을 클릭하면 다시 열립니다.", ToolTipIcon.Info);
             }
         }
@@ -960,7 +1039,7 @@ namespace WinDeck
             if (failure.Length > 0 && failure != lastHotkeyFailure && tray != null)
             {
                 string text = failure + "\n다른 프로그램이 쓰고 있을 수 있습니다. 설정에서 바꿔 주세요.";
-                tray.ShowBalloonTip(8000, "일부 단축키를 등록하지 못했습니다", text.Length > 250 ? text.Substring(0, 249) + "…" : text, ToolTipIcon.Warning);
+                Balloon(8000, "일부 단축키를 등록하지 못했습니다", text.Length > 250 ? text.Substring(0, 249) + "…" : text, ToolTipIcon.Warning);
             }
             lastHotkeyFailure = failure;
         }
@@ -985,6 +1064,11 @@ namespace WinDeck
             trayToggleItem = new ToolStripMenuItem("패널 숨기기", null, delegate { TogglePanel(); });
             trayToggleItem.Font = new Font(trayToggleItem.Font, FontStyle.Bold);
             trayAutoStartItem = new ToolStripMenuItem("윈도우 시작 시 자동 실행", null, delegate { ToggleAutoStart(); });
+            trayUpdateItem = new ToolStripMenuItem("업데이트 확인…", null, delegate
+            {
+                if (pendingUpdate != null) ShowUpdateDialog(pendingUpdate);
+                else CheckForUpdatesNow();
+            });
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.AddRange(new ToolStripItem[]
             {
@@ -995,6 +1079,7 @@ namespace WinDeck
                 new ToolStripMenuItem("설정 불러오기…", null, delegate { ImportConfig(); }),
                 new ToolStripSeparator(),
                 trayAutoStartItem,
+                trayUpdateItem,
                 new ToolStripSeparator(),
                 new ToolStripMenuItem("종료", null, delegate { ExitApp(); })
             });
@@ -1012,6 +1097,20 @@ namespace WinDeck
                 Visible = true
             };
             tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) TogglePanel(); };
+            tray.BalloonTipClicked += delegate { if (balloonIsUpdate && pendingUpdate != null) ShowUpdateDialog(pendingUpdate); };
+        }
+
+        void Balloon(int ms, string title, string text, ToolTipIcon icon)
+        {
+            Balloon(ms, title, text, icon, false);
+        }
+
+        /// <summary>트레이 알림. update 가 true 면 알림을 눌렀을 때 업데이트 창을 연다.</summary>
+        void Balloon(int ms, string title, string text, ToolTipIcon icon, bool update)
+        {
+            if (tray == null) return;
+            balloonIsUpdate = update;
+            tray.ShowBalloonTip(ms, title, text, icon);
         }
 
         void UpdateTrayText()
@@ -1036,10 +1135,52 @@ namespace WinDeck
         public void ExitApp()
         {
             exiting = true;
-            try { ConfigStore.Save(cfg); }
-            catch (Exception) { }
+            SaveBeforeExit();
+            if (watcher != null) watcher.EnableRaisingEvents = false;
             if (tray != null) tray.Visible = false;
             Close();
+        }
+
+        void SaveBeforeExit()
+        {
+            try
+            {
+                // 다른 곳에서 더 최근에 바꾼 파일은 덮어쓰지 않는다 (지금 설정은 바뀔 때마다 이미 저장되어 있다).
+                if (!ConfigStore.ChangedOnDisk()) ConfigStore.Save(cfg);
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Write(ex);
+            }
+        }
+
+        /// <summary>
+        /// 설치 파일·빌드 스크립트가 보낸 종료 요청(WinDeck.exe --exit): 열린 편집 창은 취소하고, 설정을 저장한 뒤 끝낸다.
+        /// 메시지 상자처럼 닫을 수 없는 창이 3초 넘게 남아 있으면 저장만 하고 바로 끝낸다.
+        /// </summary>
+        public void RequestExit()
+        {
+            var modals = Application.OpenForms.Cast<Form>().Where(f => f != this && f.Visible && f.Modal).ToList();
+            if (modals.Count == 0 && !dialogOpen)
+            {
+                ExitApp();
+                return;
+            }
+            if (++exitAttempts > 15)
+            {
+                exiting = true;
+                SaveBeforeExit();
+                if (tray != null) tray.Visible = false;
+                Environment.Exit(0);
+            }
+            foreach (Form f in modals) f.DialogResult = DialogResult.Cancel;
+            var retry = new Timer { Interval = 200 };
+            retry.Tick += delegate
+            {
+                retry.Dispose();
+                RequestExit();
+            };
+            retry.Start();
         }
 
         // ------------------------------------------------------------------ settings & backup
@@ -1047,13 +1188,14 @@ namespace WinDeck
         public void OpenSettings()
         {
             if (dialogOpen) return;
+            SyncFromDisk();
             dialogOpen = true;
+            UpdateInfo requested = null;
             try
             {
                 using (var f = new SettingsForm(ConfigStore.Clone(cfg), AutoStart.IsEnabled()))
                 {
                     if (f.ShowDialog(this) != DialogResult.OK) return;
-                    cfg = f.Result;
                     try
                     {
                         if (f.AutoStartEnabled != AutoStart.IsEnabled()) AutoStart.Set(f.AutoStartEnabled);
@@ -1062,14 +1204,41 @@ namespace WinDeck
                     {
                         ShowWarning("자동 실행 설정을 바꾸지 못했습니다.\n" + ex.Message);
                     }
-                    SaveConfig();
-                    ApplyConfig(false);
+                    ApplySettingsResult(f.Result, f.BackupReason);
+                    requested = f.UpdateRequested;
                 }
             }
             finally
             {
                 dialogOpen = false;
             }
+            if (requested != null) ShowUpdateDialog(requested);
+        }
+
+        /// <summary>
+        /// 설정 창에서 확인을 눌렀을 때. 창을 열어 둔 사이 단축키로 바꾼 현재 페이지와 패널 위치는 지금 값을 지키고,
+        /// 바뀌는 내용이 있으면 적용 전 설정을 백업한다.
+        /// </summary>
+        public void ApplySettingsResult(AppConfig result, string backupReason)
+        {
+            SyncFromDisk();
+            result.HasPosition = cfg.HasPosition;
+            result.WindowX = cfg.WindowX;
+            result.WindowY = cfg.WindowY;
+            if (backupReason == "before_settings")
+            {
+                string livePage = CurrentPage.Id;
+                int idx = result.Pages.FindIndex(p => p.Id == livePage);
+                if (idx >= 0) result.CurrentPage = idx;
+            }
+            if (ConfigStore.ToJson(result) != ConfigStore.ToJson(cfg))
+            {
+                try { ConfigStore.AutoBackup(cfg, backupReason); }
+                catch (Exception ex) { ErrorLog.Write(ex); }
+            }
+            cfg = result;
+            SaveConfig();
+            ApplyConfig(false);
         }
 
         void ExportConfig()
@@ -1084,22 +1253,256 @@ namespace WinDeck
         {
             if (dialogOpen) return;
             dialogOpen = true;
+            string path;
+            try { path = BackupUi.PickImportFile(this, cfg.LastImportFolder); }
+            finally { dialogOpen = false; }
+            if (path != null) ImportFile(path, true);
+        }
+
+        /// <summary>
+        /// 설정 파일을 불러온다. 내용은 WinDeck 설정 폴더에 저장되므로, 받은 파일은 바탕 화면·다운로드 어디에 있든
+        /// 불러온 뒤 지우거나 옮겨도 된다.
+        /// </summary>
+        void ImportFile(string path, bool confirm)
+        {
+            if (dialogOpen) return;
+            dialogOpen = true;
+            AppConfig n;
+            try { n = BackupUi.ReadImport(this, path, confirm); }
+            finally { dialogOpen = false; }
+            if (n == null) return;
+            SyncFromDisk();
+            try { ConfigStore.AutoBackup(cfg, "before_import"); }
+            catch (Exception ex) { ErrorLog.Write(ex); }
+            ConfigStore.KeepLocalState(cfg, n);
+            n.LastImportFolder = Path.GetDirectoryName(path);
+            cfg = n;
+            SaveConfig();
+            ApplyConfig(false);
+            ShowPanel();
+            Balloon(6000, "설정을 불러왔습니다",
+                "내용은 WinDeck 에 저장되었으므로 받은 파일(" + Path.GetFileName(path) + ")은 지우거나 옮겨도 됩니다.", ToolTipIcon.Info);
+        }
+
+        /// <summary>다른 위치(이전 포터블 폴더, 설치본 등)에서 찾은 설정을 불러올지 묻는다.</summary>
+        void OfferPreviousConfig(FoundConfig p)
+        {
+            ConfigStore.Previous = null;
+            string head = p.IsNewLocation
+                ? "이 위치에서 WinDeck 을 처음 실행했습니다.\n전에 쓰던 설정을 찾았습니다."
+                : "다른 위치의 WinDeck 에 더 최근에 저장된 설정이 있습니다.";
+            string msg = head + "\n\n" + p.Path + "\n마지막 저장 " + p.Time.ToString("yyyy-MM-dd HH:mm") + " · " + ConfigStore.Describe(p.Config)
+                + "\n\n이 설정을 불러올까요?" + (p.IsNewLocation ? "" : "\n(지금 설정은 백업해 둡니다)");
+            DialogResult r;
+            dialogOpen = true;
+            try { r = MessageBox.Show(this, msg, "WinDeck - 이전 설정", MessageBoxButtons.YesNo, MessageBoxIcon.Question); }
+            finally { dialogOpen = false; }
+            if (r != DialogResult.Yes) return;
+            if (!p.IsNewLocation)
+            {
+                try { ConfigStore.AutoBackup(cfg, "before_previous"); }
+                catch (Exception ex) { ErrorLog.Write(ex); }
+            }
+            cfg = p.Config;
+            SaveConfig();
+            ApplyConfig(false);
+            if (cfg.HasPosition)
+            {
+                Location = new Point(cfg.WindowX, cfg.WindowY);
+                ClampToScreen();
+            }
+            Balloon(5000, "이전 설정을 불러왔습니다", ConfigStore.Describe(cfg), ToolTipIcon.Info);
+        }
+
+        // ------------------------------------------------------------------ 다른 곳에서 바뀐 설정 파일
+
+        void StartConfigWatcher()
+        {
             try
             {
-                AppConfig n = BackupUi.Import(this, cfg);
-                if (n == null) return;
-                n.HasPosition = cfg.HasPosition;
-                n.WindowX = cfg.WindowX;
-                n.WindowY = cfg.WindowY;
-                cfg = n;
+                Directory.CreateDirectory(ConfigStore.Dir);
+                watcher = new FileSystemWatcher(ConfigStore.Dir, "config.json");
+                watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.CreationTime;
+                watcher.Changed += delegate { QueueReloadCheck(); };
+                watcher.Created += delegate { QueueReloadCheck(); };
+                watcher.Renamed += delegate { QueueReloadCheck(); };
+                watcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Write(ex);
+            }
+        }
+
+        void QueueReloadCheck()
+        {
+            try
+            {
+                BeginInvoke(new Action(delegate
+                {
+                    reloadTimer.Stop();
+                    reloadTimer.Start();
+                }));
+            }
+            catch (InvalidOperationException) { }
+        }
+
+        /// <summary>
+        /// 마지막으로 읽거나 저장한 뒤 다른 곳에서 config.json 이 바뀌었으면 다시 읽는다.
+        /// 메모리에 있던 예전 설정으로 새 파일을 덮어써서 최근 설정이 되돌아가는 일을 막는다. 다시 읽었으면 true.
+        /// </summary>
+        bool SyncFromDisk()
+        {
+            if (!ConfigStore.ChangedOnDisk()) return false;
+            AppConfig n;
+            try
+            {
+                n = ConfigStore.ReloadFromDisk();
+            }
+            catch (Exception)
+            {
+                return false; // 쓰는 중이거나 잘못된 파일: 지금 설정을 유지 (다음 저장 때 그 파일은 백업된다)
+            }
+            try { ConfigStore.AutoBackup(cfg, "before_reload"); }
+            catch (Exception ex) { ErrorLog.Write(ex); }
+            ConfigStore.KeepLocalState(cfg, n);
+            cfg = n;
+            ApplyConfig(false);
+            Balloon(5000, "설정을 다시 불러왔습니다", "다른 곳에서 바뀐 설정 파일을 읽었습니다. 바뀌기 전 상태는 백업해 두었습니다.", ToolTipIcon.Info);
+            return true;
+        }
+
+        /// <summary>점검용: 바뀐 설정 파일을 바로 확인한다.</summary>
+        public bool CheckExternalChange()
+        {
+            return SyncFromDisk();
+        }
+
+        // ------------------------------------------------------------------ backup & update
+
+        void DoMaintenance()
+        {
+            if (dialogOpen) return;
+            ConfigStore.BackupIfDue(cfg);
+            if (AppInstance.IsTest && Updater.TestUrl == null) return;
+            if (cfg.AutoUpdateCheck && UpdateCheckDue()) CheckForUpdates(false);
+        }
+
+        bool UpdateCheckDue()
+        {
+            DateTime last;
+            if (!DateTime.TryParse(cfg.LastUpdateCheck, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out last)) return true;
+            return DateTime.UtcNow - last.ToUniversalTime() > TimeSpan.FromHours(20);
+        }
+
+        /// <summary>트레이 메뉴·명령줄(--check-update)에서: 바로 확인하고 결과를 알려준다.</summary>
+        public void CheckForUpdatesNow()
+        {
+            CheckForUpdates(true);
+        }
+
+        void CheckForUpdates(bool manual)
+        {
+            if (updateChecking) return;
+            updateChecking = true;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                UpdateInfo info = null;
+                Exception error = null;
+                try { info = Updater.FetchLatest(); }
+                catch (Exception ex) { error = ex; }
+                try { BeginInvoke(new Action(delegate { OnUpdateChecked(info, error, manual); })); }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        void OnUpdateChecked(UpdateInfo info, Exception error, bool manual)
+        {
+            updateChecking = false;
+            if (error != null)
+            {
+                if (manual) ShowWarning("업데이트를 확인하지 못했습니다.\n" + Updater.Describe(error));
+                return;
+            }
+            if (!dialogOpen)
+            {
+                SyncFromDisk();
+                cfg.LastUpdateCheck = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
                 SaveConfig();
-                ApplyConfig(false);
-                ShowPanel();
+            }
+            if (!Updater.IsNewer(info.Version, AppInfo.Version))
+            {
+                pendingUpdate = null;
+                UpdateTrayUpdateItem();
+                if (manual)
+                    MessageBox.Show(this, "지금 최신 버전(v" + AppInfo.Version + ")을 쓰고 있습니다.", "WinDeck 업데이트",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            pendingUpdate = info;
+            UpdateTrayUpdateItem();
+            if (manual && !dialogOpen)
+            {
+                ShowUpdateDialog(info);
+                return;
+            }
+            // 다른 창이 열려 있으면 알림만 띄운다 (알림이나 트레이 메뉴에서 설치).
+            if (!manual && info.Version == cfg.SkippedUpdateVersion) return;
+            Balloon(15000, "WinDeck v" + info.Version + " 이 나왔습니다",
+                "여기를 누르면 바뀐 내용을 보고 바로 설치할 수 있습니다.", ToolTipIcon.Info, true);
+        }
+
+        void UpdateTrayUpdateItem()
+        {
+            if (trayUpdateItem == null) return;
+            bool has = pendingUpdate != null;
+            trayUpdateItem.Text = has ? "새 버전 v" + pendingUpdate.Version + " 설치…" : "업데이트 확인…";
+            trayUpdateItem.Font = new Font(trayMenu.Font, has ? FontStyle.Bold : FontStyle.Regular);
+        }
+
+        void ShowUpdateDialog(UpdateInfo info)
+        {
+            if (dialogOpen) return;
+            dialogOpen = true;
+            PreparedUpdate prepared = null;
+            try
+            {
+                using (var f = new UpdateForm(info))
+                {
+                    if (f.ShowDialog(this) == DialogResult.OK) prepared = f.Prepared;
+                    if (f.SkipRequested)
+                    {
+                        SyncFromDisk();
+                        cfg.SkippedUpdateVersion = info.Version;
+                        SaveConfig();
+                    }
+                }
             }
             finally
             {
                 dialogOpen = false;
             }
+            if (prepared != null) ApplyPreparedUpdate(prepared);
+        }
+
+        /// <summary>받아서 검사한 업데이트를 설치한다: 설정을 저장·백업하고, 설치를 시작한 뒤 이 WinDeck 은 끝낸다.</summary>
+        void ApplyPreparedUpdate(PreparedUpdate p)
+        {
+            SyncFromDisk();
+            SaveConfig();
+            try { ConfigStore.AutoBackup(cfg, "before_update"); }
+            catch (Exception ex) { ErrorLog.Write(ex); }
+            try
+            {
+                Updater.Launch(p);
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Write(ex);
+                ShowWarning("업데이트를 시작하지 못했습니다.\n" + ex.Message + "\n\n릴리스 페이지에서 직접 받아 설치해 주세요.");
+                return;
+            }
+            ExitApp();
         }
 
         /// <summary>버튼·페이지 구성이 바뀐 뒤: 저장, 화면 갱신, 단축키 재등록.</summary>
