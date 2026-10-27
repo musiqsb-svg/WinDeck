@@ -158,7 +158,7 @@ release.bat
 gh release create v1.0.1 WinDeck-Setup-1.0.1.exe WinDeck-Portable-1.0.1.zip --title "WinDeck 1.0.1" --notes "변경 내용"
 ```
 
-팀원 다운로드 주소는 항상 같음: <https://github.com/hopenesttt-prog/WinDeck/releases/latest>
+팀원 다운로드 주소는 항상 같음: <https://github.com/musiqsb-svg/WinDeck/releases/latest>
 
 **보안 경고**: 코드 서명 인증서가 없어 처음 실행 시 "Windows의 PC 보호" 창 표시 → [추가 정보] → [실행]. 일부 백신이 키 입력 기능 때문에 의심할 수 있음 — 사내 배포 시 IT 담당자에게 예외 등록 요청.
 
@@ -185,4 +185,4 @@ gh release create v1.0.1 WinDeck-Setup-1.0.1.exe WinDeck-Portable-1.0.1.zip --ti
 
 ## 라이선스
 
-[MIT](LICENSE) © 2026 hopenesttt-prog — 사용·복사·수정·배포 자유, 단 저작권 표시와 라이선스 문구 유지. 프로그램은 "있는 그대로" 제공되며 어떤 보증도 하지 않음.
+[MIT](LICENSE) © 2026 musiqsb-svg — 사용·복사·수정·배포 자유, 단 저작권 표시와 라이선스 문구 유지. 프로그램은 "있는 그대로" 제공되며 어떤 보증도 하지 않음.

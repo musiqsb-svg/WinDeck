@@ -13,7 +13,7 @@
 
 | ① **추가 정보** 누르기 | ② 앱 이름 확인 후 **실행** 누르기 |
 |---|---|
-| <img src="https://raw.githubusercontent.com/hopenesttt-prog/WinDeck/main/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/hopenesttt-prog/WinDeck/main/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
+| <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/main/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/main/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
 
 코드 서명 인증서가 없어서 "알 수 없는 게시자"로 나오는 안내입니다 (Microsoft Defender 검사 결과 위협 없음).
 
