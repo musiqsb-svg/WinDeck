@@ -1,5 +1,42 @@
 # 변경 기록
 
+## 1.4.0 — (배포 전)
+
+> [!WARNING]
+> **Microsoft Edge로는 설치되지 않습니다.** Chrome, 네이버 웨일, Firefox 등 다른 브라우저로 내려받으세요.
+
+### 받을 파일
+- **WinDeck-1.4.0.zip** — 새로 받는 분은 이것만 받으세요. 압축을 풀면 `WinDeck 설치.exe`, `WinDeck 제거.exe`, `app` 폴더가 있습니다. `WinDeck 설치.exe` 를 실행합니다.
+- **WinDeck-Setup-1.4.0.exe**, **WinDeck-Portable-1.4.0.zip**, **WinDeck-SHA256-1.4.0.txt** — 1.3.0 의 자동 업데이트가 쓰는 파일 (직접 받을 필요 없음)
+
+1.3.0 을 쓰는 분은 트레이 알림의 [지금 업데이트] 로 바로 바뀝니다.
+
+처음 실행 시 "Windows의 PC 보호" 창이 뜨면 **[추가 정보] → [실행]**.
+
+| ① **추가 정보** 누르기 | ② 앱 이름 확인 후 **실행** 누르기 |
+|---|---|
+| <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/v1.4.0/src/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/v1.4.0/src/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
+
+### 추가
+- **버튼 끌어 옮기기**: 버튼을 누른 채 끌어 같은 페이지의 다른 칸에 놓기. 다른 버튼 위에 놓으면 두 버튼이 자리를 바꿈
+  - 끄는 동안 버튼 모양이 마우스를 따라오고, 놓을 칸에 파란 테두리
+  - 조금 움직인 클릭은 그대로 클릭으로 실행. 패널 밖에 놓으면 그대로
+- **다른 페이지로 옮기기**: 버튼 우클릭 → [다른 페이지로 옮기기] → 페이지 선택. 그 페이지의 첫 빈칸으로 옮기고 패널은 지금 페이지에 남음
+  - 빈칸이 없는 페이지는 "(빈칸 없음)" 으로 표시, [새 페이지를 만들어 옮기기…]
+  - 버튼의 바로 실행 단축키도 함께 옮겨 감
+- **끌어 놓을 때 버튼 이름 묻기**: 파일·폴더·링크를 패널에 끌어 놓으면 이름 입력 창이 뜸 (자동 이름이 미리 들어 있어 Enter 로 그대로 만들기, [취소]면 만들지 않음)
+  - 브라우저 주소 창의 자물쇠를 끌어 놓으면 페이지 제목을 자동 이름으로 씀
+
+### 바뀜 — 설치 방식과 폴더 구조
+- **받는 꾸러미**: 맨 위에 `WinDeck 설치.exe`, `WinDeck 제거.exe` 두 개만 있고, 구동 파일은 `app` 폴더에 모음
+- **설치 프로그램을 새로 만듦** (Inno Setup 대신): 관리자 권한 없이 `%LOCALAPPDATA%\Programs\WinDeck` 에 설치, Windows '설치된 앱' 에 등록
+  - 다시 설치·업데이트할 때 바탕 화면 바로가기·자동 실행 선택을 그대로 유지
+  - 1.3.0 이하 설치본 위에 설치하면 옛 파일·시작 메뉴 폴더·등록 정보를 정리
+- **제거는 설치가 만든 것만 지움**: 설치 표식 파일과 정해진 설치 경로가 모두 맞을 때만 폴더를 지움. 바로가기·자동 실행 값은 설치 폴더를 가리킬 때만 지움. 버튼 설정은 지울지 물음
+- **포터블판 없음**: 설정은 늘 `%APPDATA%\WinDeck`. 1.3 이하 포터블판의 `WinDeckData` 설정이 더 최근이면 처음 실행할 때 자동으로 옮김 (옮기기 전 설정은 백업, 옛 폴더는 그대로 둠). 설치하지 않은 WinDeck 은 트레이 메뉴 [설치하기…] 로 설치
+- 자동 업데이트는 늘 설치 파일로 설치 (설치하지 않고 쓰던 WinDeck 도 설치판으로 바뀜)
+- 저장소 폴더 정리: 소스·점검·문서·빌드 도구는 `src` 아래로
+
 ## 1.3.0 — 2026-10-27
 
 > [!WARNING]
@@ -16,7 +53,7 @@
 
 | ① **추가 정보** 누르기 | ② 앱 이름 확인 후 **실행** 누르기 |
 |---|---|
-| <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/main/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/main/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
+| <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/v1.3.0/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/v1.3.0/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
 
 ### 고침 — 업데이트 뒤 최근 설정이 되돌아가던 문제
 - 포터블판을 새 폴더에 풀면 빈 `WinDeckData` 로 새로 시작하던 문제 → 처음 실행할 때 이전에 쓰던 설정(예전 포터블 폴더, 설치판 설정, 마지막으로 쓴 위치)을 찾아 불러올지 물어봄
@@ -50,7 +87,7 @@
 
 | ① **추가 정보** 누르기 | ② 앱 이름 확인 후 **실행** 누르기 |
 |---|---|
-| <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/main/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/main/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
+| <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/v1.2.0/docs/images/smartscreen-1.png" alt="추가 정보 누르기" width="360"> | <img src="https://raw.githubusercontent.com/musiqsb-svg/WinDeck/v1.2.0/docs/images/smartscreen-2.png" alt="실행 누르기" width="360"> |
 
 코드 서명 인증서가 없어서 "알 수 없는 게시자"로 나오는 안내입니다 (Microsoft Defender 검사 결과 위협 없음).
 

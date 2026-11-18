@@ -58,6 +58,7 @@ namespace WinDeck
             AppDomain.CurrentDomain.UnhandledException += (s, e) => ErrorLog.Report(e.ExceptionObject as Exception);
 
             Updater.CleanupAfterUpdate();
+            ConfigStore.MigrateLegacyPortable(); // 1.3 이하 포터블 판의 설정을 %APPDATA%\WinDeck 으로
             AppConfig cfg = ConfigStore.Load();
             ConfigStore.FindPreviousConfig();
             ConfigStore.RememberLocation();

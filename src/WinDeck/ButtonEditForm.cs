@@ -33,6 +33,9 @@ namespace WinDeck
             "MediaNext  —  다음 곡"
         };
 
+        /// <summary>버튼 이름 최대 글자 수 (편집 창, 끌어 놓을 때 묻는 창이 같이 쓴다).</summary>
+        public const int TitleMaxLength = 40;
+
         readonly AppConfig cfg;
         readonly DeckButton original;
         readonly int pageIndex, buttonIndex;
@@ -85,7 +88,7 @@ namespace WinDeck
             tips = new ToolTip();
 
             AddLabel(this, "버튼 이름", 16, 19);
-            txtTitle = new TextBox { Location = new Point(120, 16), Size = new Size(330, 23), MaxLength = 40 };
+            txtTitle = new TextBox { Location = new Point(120, 16), Size = new Size(330, 23), MaxLength = TitleMaxLength };
             Controls.Add(txtTitle);
 
             AddLabel(this, "설명 (툴팁)", 16, 51);

@@ -37,8 +37,11 @@ namespace WinDeck
         NotifyIcon tray;
         ContextMenuStrip trayMenu;
         ToolStripMenuItem trayToggleItem, trayAutoStartItem;
-        ToolStripMenuItem miEdit, miRun, miCopy, miPaste, miClear;
+        ToolStripMenuItem miEdit, miRun, miCopy, miPaste, miClear, miMove;
         DeckButton copiedButton;
+        DragGhost moveGhost;
+        DeckKey moveTarget;
+        string movePageId;
         Rectangle titleRect;
         bool dragging;
         Point dragCursor, dragOrigin;
@@ -89,6 +92,9 @@ namespace WinDeck
                 k.Wheel += HandleWheel;
                 k.DragEnter += Key_DragEnter;
                 k.DragDrop += Key_DragDrop;
+                k.MoveStarted += Key_MoveStarted;
+                k.MoveDragged += Key_MoveDragged;
+                k.MoveEnded += Key_MoveEnded;
                 k.ContextMenuStrip = keyMenu;
                 keys.Add(k);
                 Controls.Add(k);
@@ -217,6 +223,10 @@ namespace WinDeck
             if (ConfigStore.LoadWarning != null)
             {
                 ShowWarning(ConfigStore.LoadWarning);
+            }
+            else if (ConfigStore.MigratedFrom != null)
+            {
+                OfferInstallAfterMigration(ConfigStore.MigratedFrom);
             }
             else if (ConfigStore.Previous != null)
             {
@@ -613,9 +623,10 @@ namespace WinDeck
             miCopy = new ToolStripMenuItem("복사", null, delegate { if (MenuKey != null) copiedButton = MenuKey.Data.Clone(); });
             miPaste = new ToolStripMenuItem("붙여넣기", null, delegate { PasteInto(MenuKey); });
             miClear = new ToolStripMenuItem("비우기", null, delegate { ClearKey(MenuKey); });
+            miMove = new ToolStripMenuItem("다른 페이지로 옮기기");
             m.Items.AddRange(new ToolStripItem[]
             {
-                miEdit, miRun, new ToolStripSeparator(), miCopy, miPaste, miClear, new ToolStripSeparator(),
+                miEdit, miRun, new ToolStripSeparator(), miCopy, miPaste, miClear, miMove, new ToolStripSeparator(),
                 new ToolStripMenuItem("페이지 이름 변경…", null, delegate { RenamePage(); }),
                 new ToolStripMenuItem("페이지 추가…", null, delegate { AddPage(); }),
                 new ToolStripMenuItem("설정…", null, delegate { OpenSettings(); })
@@ -629,8 +640,150 @@ namespace WinDeck
                 miCopy.Enabled = has;
                 miClear.Enabled = has;
                 miPaste.Enabled = copiedButton != null;
+                FillMoveMenu(has ? k.Index : -1);
             };
             return m;
+        }
+
+        /// <summary>[다른 페이지로 옮기기] 아래 목록: 지금 페이지를 뺀 모든 페이지 + 새 페이지.</summary>
+        void FillMoveMenu(int index)
+        {
+            foreach (ToolStripItem old in miMove.DropDownItems.Cast<ToolStripItem>().ToList()) old.Dispose();
+            miMove.DropDownItems.Clear();
+            miMove.Enabled = index >= 0;
+            if (index < 0) return;
+            DeckPage current = CurrentPage;
+            string fromId = current.Id;
+            for (int i = 0; i < cfg.Pages.Count; i++)
+            {
+                DeckPage p = cfg.Pages[i];
+                if (p == current) continue;
+                string toId = p.Id;
+                bool full = FirstFreeSlot(p) < 0;
+                string name = string.IsNullOrWhiteSpace(p.Name) ? "페이지 " + (i + 1) : p.Name;
+                var item = new ToolStripMenuItem(name.Replace("&", "&&") + (full ? "  (빈칸 없음)" : ""), null,
+                    delegate { MoveKeyToPage(fromId, index, toId); });
+                item.Enabled = !full;
+                miMove.DropDownItems.Add(item);
+            }
+            if (miMove.DropDownItems.Count > 0) miMove.DropDownItems.Add(new ToolStripSeparator());
+            miMove.DropDownItems.Add(new ToolStripMenuItem("새 페이지를 만들어 옮기기…", null, delegate { MoveKeyToNewPage(fromId, index); }));
+        }
+
+        /// <summary>보이는 칸 중 첫 빈칸. 없으면 -1 (숨긴 뒤쪽 칸은 쓰지 않는다).</summary>
+        int FirstFreeSlot(DeckPage page)
+        {
+            for (int i = 0; i < cfg.ButtonCount && i < page.Buttons.Count; i++)
+                if (page.Buttons[i] == null || page.Buttons[i].IsEmpty) return i;
+            return -1;
+        }
+
+        /// <summary>
+        /// 버튼을 다른 페이지의 첫 빈칸으로 옮긴다. 패널은 지금 페이지에 남는다.
+        /// 버튼의 단축키도 버튼과 함께 옮겨 간다.
+        /// </summary>
+        public bool MoveKeyToPage(string fromPageId, int index, string toPageId)
+        {
+            SyncFromDisk();
+            DeckPage from = cfg.Pages.Find(p => p.Id == fromPageId);
+            DeckPage to = cfg.Pages.Find(p => p.Id == toPageId);
+            if (from == null || to == null || from == to || index < 0 || index >= from.Buttons.Count) return false;
+            DeckButton b = from.Buttons[index];
+            if (b == null || b.IsEmpty) return false;
+            int slot = FirstFreeSlot(to);
+            if (slot < 0)
+            {
+                ShowWarning("'" + to.Name + "' 페이지에 빈칸이 없어 옮기지 못했습니다.");
+                return false;
+            }
+            to.Buttons[slot] = b;
+            from.Buttons[index] = new DeckButton();
+            ConfigChanged();
+            if (CurrentPage == from) keys[index].Flash(Theme.Accent);
+            return true;
+        }
+
+        void MoveKeyToNewPage(string fromPageId, int index)
+        {
+            string name = AskText("새 페이지로 옮기기", "새 페이지 이름", "페이지 " + (cfg.Pages.Count + 1));
+            if (name == null) return;
+            SyncFromDisk();
+            DeckPage from = cfg.Pages.Find(p => p.Id == fromPageId);
+            if (from == null || index < 0 || index >= from.Buttons.Count || from.Buttons[index].IsEmpty) return;
+            DeckPage page = DeckPage.CreateEmpty(name);
+            page.Buttons[0] = from.Buttons[index];
+            from.Buttons[index] = new DeckButton();
+            cfg.Pages.Add(page);
+            ConfigChanged();
+            if (CurrentPage == from) keys[index].Flash(Theme.Accent);
+        }
+
+        // ------------------------------------------------------------------ moving a key inside the page (mouse drag)
+
+        void Key_MoveStarted(object sender, EventArgs e)
+        {
+            var k = (DeckKey)sender;
+            movePageId = CurrentPage.Id;
+            tip.Active = false; // 끄는 동안 설명 풍선이 따라다니지 않게
+            EndGhost();
+            moveGhost = new DragGhost(k.Snapshot(), k.PointToClient(Cursor.Position));
+            moveGhost.MoveTo(Cursor.Position);
+            moveGhost.Show();
+            k.MoveSource = true;
+        }
+
+        void Key_MoveDragged(DeckKey k, Point screen)
+        {
+            if (moveGhost != null) moveGhost.MoveTo(screen);
+            DeckKey target = KeyAt(screen);
+            if (target == k) target = null;
+            if (target == moveTarget) return;
+            if (moveTarget != null) moveTarget.MoveTarget = false;
+            moveTarget = target;
+            if (target != null) target.MoveTarget = true;
+        }
+
+        void Key_MoveEnded(DeckKey k, Point screen, bool cancelled)
+        {
+            DeckKey target = cancelled ? null : KeyAt(screen);
+            k.MoveSource = false;
+            if (moveTarget != null) moveTarget.MoveTarget = false;
+            moveTarget = null;
+            EndGhost();
+            tip.Active = true;
+            if (target == null || target == k) return; // 패널 밖이나 제자리에 놓으면 그대로 둔다
+            SwapKeys(movePageId, k.Index, target.Index);
+        }
+
+        void EndGhost()
+        {
+            if (moveGhost == null) return;
+            moveGhost.Close();
+            moveGhost.Dispose();
+            moveGhost = null;
+        }
+
+        /// <summary>화면 좌표 아래에 있는 보이는 버튼 칸. 없으면 null.</summary>
+        DeckKey KeyAt(Point screen)
+        {
+            Point p = PointToClient(screen);
+            foreach (DeckKey k in keys)
+                if (k.Visible && k.Bounds.Contains(p)) return k;
+            return null;
+        }
+
+        /// <summary>같은 페이지에서 버튼을 옮긴다. 놓은 칸에 버튼이 있으면 두 버튼의 자리를 바꾼다.</summary>
+        public bool SwapKeys(string pageId, int from, int to)
+        {
+            SyncFromDisk();
+            DeckPage page = cfg.Pages.Find(p => p.Id == pageId);
+            if (page == null || from == to || from < 0 || to < 0 || from >= page.Buttons.Count || to >= page.Buttons.Count) return false;
+            DeckButton moved = page.Buttons[from];
+            page.Buttons[from] = page.Buttons[to];
+            page.Buttons[to] = moved;
+            ConfigChanged();
+            if (CurrentPage == page) keys[to].Flash(Theme.Accent);
+            return true;
         }
 
         DeckKey menuKey;
@@ -723,11 +876,34 @@ namespace WinDeck
                     if (r != DialogResult.No) return;
                 }
                 if (!ConfirmReplace(k.Data, "'" + b.Title + "'")) return;
+                string pageId = CurrentPage.Id;
+                string name = AskDroppedButtonName(b);
+                if (name == null) return; // [취소]: 버튼을 만들지 않는다
+                b.Title = name;
                 SyncFromDisk();
-                CurrentPage.Buttons[k.Index] = b;
+                DeckPage page = cfg.Pages.Find(p => p.Id == pageId);
+                if (page == null) return;
+                page.Buttons[k.Index] = b;
                 ConfigChanged();
-                k.Flash(Theme.Accent);
+                if (CurrentPage == page) k.Flash(Theme.Accent);
             }));
+        }
+
+        /// <summary>끌어 놓아 만든 버튼의 이름을 묻는다 (자동 이름이 미리 들어 있음). [취소]면 null.</summary>
+        string AskDroppedButtonName(DeckButton b)
+        {
+            if (dialogOpen) return null;
+            dialogOpen = true;
+            try
+            {
+                string what = b.Action == ActionTypes.Text ? b.Target.Split('\n')[0].Trim() : b.Target;
+                return InputDialog.AskAllowEmpty(this, "새 버튼", "버튼 이름 (Enter: 이 이름으로 만들기)", b.Title,
+                    ActionTypes.DisplayName(b.Action) + " · " + what, ButtonEditForm.TitleMaxLength);
+            }
+            finally
+            {
+                dialogOpen = false;
+            }
         }
 
         static DeckButton ButtonFromDrop(IDataObject data)
@@ -760,11 +936,41 @@ namespace WinDeck
                 && Uri.TryCreate(ActionRunner.NormalizeUrl(text), UriKind.Absolute, out uri))
             {
                 string host = uri.Host.StartsWith("www.") ? uri.Host.Substring(4) : uri.Host;
-                return new DeckButton { Title = host, Action = ActionTypes.Url, Target = text };
+                // 브라우저 주소 창의 자물쇠를 끌어오면 페이지 제목이 함께 온다. 있으면 그것을 자동 이름으로 쓴다.
+                string pageTitle = BrowserLinkTitle(data);
+                return new DeckButton { Title = pageTitle ?? host, Action = ActionTypes.Url, Target = text };
             }
             string firstLine = text.Split('\n')[0].Trim();
             string shortTitle = firstLine.Length > 10 ? firstLine.Substring(0, 10) + "…" : firstLine;
             return new DeckButton { Title = shortTitle, Action = ActionTypes.Text, Target = text };
+        }
+
+        /// <summary>
+        /// Chrome·Edge 가 링크와 함께 넘기는 가상 파일 이름("페이지 제목.url")에서 제목을 꺼낸다. 없으면 null.
+        /// FILEGROUPDESCRIPTORW: 앞 4바이트 = 개수, 첫 FILEDESCRIPTORW 의 파일 이름은 그 뒤 72바이트 위치 (WCHAR 260개).
+        /// </summary>
+        static string BrowserLinkTitle(IDataObject data)
+        {
+            try
+            {
+                if (!data.GetDataPresent("FileGroupDescriptorW")) return null;
+                var ms = data.GetData("FileGroupDescriptorW") as MemoryStream;
+                if (ms == null) return null;
+                byte[] buf = ms.ToArray();
+                const int nameOffset = 4 + 72;
+                if (buf.Length < nameOffset + 2 || BitConverter.ToInt32(buf, 0) < 1) return null;
+                string name = System.Text.Encoding.Unicode.GetString(buf, nameOffset, Math.Min(520, buf.Length - nameOffset));
+                int end = name.IndexOf('\0');
+                if (end >= 0) name = name.Substring(0, end);
+                if (name.EndsWith(".url", StringComparison.OrdinalIgnoreCase)) name = name.Substring(0, name.Length - 4);
+                name = name.Trim();
+                if (name.Length == 0) return null;
+                return name.Length > ButtonEditForm.TitleMaxLength ? name.Substring(0, ButtonEditForm.TitleMaxLength).Trim() : name;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         static string ReadInternetShortcut(string path)
@@ -1069,6 +1275,8 @@ namespace WinDeck
                 if (pendingUpdate != null) ShowUpdateDialog(pendingUpdate);
                 else CheckForUpdatesNow();
             });
+            // 설치하지 않고 쓰는 WinDeck (꾸러미의 app\WinDeck.exe 를 바로 켰거나, 1.3 이하 포터블에서 업데이트한 경우)
+            var trayInstallItem = new ToolStripMenuItem("설치하기…", null, delegate { StartInstall(); });
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.AddRange(new ToolStripItem[]
             {
@@ -1080,6 +1288,7 @@ namespace WinDeck
                 new ToolStripSeparator(),
                 trayAutoStartItem,
                 trayUpdateItem,
+                trayInstallItem,
                 new ToolStripSeparator(),
                 new ToolStripMenuItem("종료", null, delegate { ExitApp(); })
             });
@@ -1087,6 +1296,7 @@ namespace WinDeck
             {
                 trayToggleItem.Text = Visible ? "패널 숨기기" : "패널 보이기";
                 trayAutoStartItem.Checked = AutoStart.IsEnabled();
+                trayInstallItem.Visible = !Updater.IsInstalled;
             };
 
             tray = new NotifyIcon
@@ -1285,6 +1495,35 @@ namespace WinDeck
         }
 
         /// <summary>다른 위치(이전 포터블 폴더, 설치본 등)에서 찾은 설정을 불러올지 묻는다.</summary>
+        /// <summary>
+        /// 1.3 이하 포터블 판의 설정을 %APPDATA%\WinDeck 으로 옮긴 뒤: 알리고, 설치하지 않은 WinDeck 이면 설치를 권한다.
+        /// </summary>
+        void OfferInstallAfterMigration(string from)
+        {
+            string msg = "포터블 판의 버튼 설정을 옮겼습니다.\n\n"
+                + "옮긴 곳: " + ConfigStore.Dir + "\n"
+                + "원래 파일: " + from + "\n"
+                + "(원래 폴더는 그대로 두었습니다. 확인한 뒤 지워도 됩니다.)";
+            if (Updater.IsInstalled)
+            {
+                MessageBox.Show(this, msg, "WinDeck - 설정 옮김", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            msg += "\n\nv1.4.0 부터는 포터블 판이 없고, 설치해서 씁니다.\n지금 설치할까요? (인터넷에서 설치 파일을 받습니다)"
+                + "\n\n[아니요]를 누르면 나중에 트레이 메뉴 > [설치하기…]에서 설치할 수 있습니다.";
+            DialogResult r;
+            dialogOpen = true;
+            try { r = MessageBox.Show(this, msg, "WinDeck - 설정 옮김", MessageBoxButtons.YesNo, MessageBoxIcon.Information); }
+            finally { dialogOpen = false; }
+            if (r == DialogResult.Yes) StartInstall();
+        }
+
+        /// <summary>설치하지 않고 쓰는 WinDeck 을 설치한다: 최신 릴리스의 설치 파일을 받아 실행한다 (같은 버전이어도).</summary>
+        public void StartInstall()
+        {
+            CheckForUpdates(true, true);
+        }
+
         void OfferPreviousConfig(FoundConfig p)
         {
             ConfigStore.Previous = null;
@@ -1403,6 +1642,12 @@ namespace WinDeck
 
         void CheckForUpdates(bool manual)
         {
+            CheckForUpdates(manual, false);
+        }
+
+        /// <param name="install">true: 설치하지 않고 쓰는 WinDeck 을 설치 (새 버전이 아니어도 설치 창을 연다).</param>
+        void CheckForUpdates(bool manual, bool install)
+        {
             if (updateChecking) return;
             updateChecking = true;
             System.Threading.ThreadPool.QueueUserWorkItem(delegate
@@ -1411,17 +1656,23 @@ namespace WinDeck
                 Exception error = null;
                 try { info = Updater.FetchLatest(); }
                 catch (Exception ex) { error = ex; }
-                try { BeginInvoke(new Action(delegate { OnUpdateChecked(info, error, manual); })); }
+                try { BeginInvoke(new Action(delegate { OnUpdateChecked(info, error, manual, install); })); }
                 catch (InvalidOperationException) { }
             });
         }
 
-        void OnUpdateChecked(UpdateInfo info, Exception error, bool manual)
+        void OnUpdateChecked(UpdateInfo info, Exception error, bool manual, bool install)
         {
             updateChecking = false;
             if (error != null)
             {
-                if (manual) ShowWarning("업데이트를 확인하지 못했습니다.\n" + Updater.Describe(error));
+                if (manual) ShowWarning((install ? "설치 파일 정보를 받지 못했습니다.\n" : "업데이트를 확인하지 못했습니다.\n") + Updater.Describe(error));
+                return;
+            }
+            if (install && !Updater.IsNewer(AppInfo.Version, info.Version))
+            {
+                // 최신 릴리스(지금과 같거나 새 버전)를 설치한다. 지금보다 옛 버전이면 설치하지 않는다.
+                if (!dialogOpen) ShowUpdateDialog(info, true);
                 return;
             }
             if (!dialogOpen)
@@ -1462,12 +1713,17 @@ namespace WinDeck
 
         void ShowUpdateDialog(UpdateInfo info)
         {
+            ShowUpdateDialog(info, false);
+        }
+
+        void ShowUpdateDialog(UpdateInfo info, bool install)
+        {
             if (dialogOpen) return;
             dialogOpen = true;
             PreparedUpdate prepared = null;
             try
             {
-                using (var f = new UpdateForm(info))
+                using (var f = new UpdateForm(info, install))
                 {
                     if (f.ShowDialog(this) == DialogResult.OK) prepared = f.Prepared;
                     if (f.SkipRequested)

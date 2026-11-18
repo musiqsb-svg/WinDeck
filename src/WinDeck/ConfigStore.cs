@@ -42,33 +42,60 @@ namespace WinDeck
             set { dir = value; }
         }
 
-        public static bool IsPortable
-        {
-            get { return string.Equals(Path.GetFullPath(Dir), Path.GetFullPath(Path.Combine(AppDir, PortableFolderName)), StringComparison.OrdinalIgnoreCase); }
-        }
-
+        /// <summary>
+        /// 1.4 부터 설정은 늘 %APPDATA%\WinDeck 에 둔다 (포터블 판 없음).
+        /// 점검용 실행(WINDECK_INSTANCE)은 실제 사용자 설정을 절대 건드리지 않는다 (InstallInfo.SettingsDir 참고).
+        /// </summary>
         static string ResolveDir()
         {
-            string portable = Path.Combine(AppDir, PortableFolderName);
-            if (Directory.Exists(portable) && IsWritable(portable)) return portable;
-            // 점검용 실행(WINDECK_INSTANCE)은 실제 사용자 설정(%APPDATA%\WinDeck)을 절대 건드리지 않는다.
-            if (AppInstance.IsTest) return Path.Combine(Path.GetTempPath(), "WinDeck-test", AppInstance.TestId);
-            return AppDataDir;
+            return InstallInfo.SettingsDir;
         }
 
-        static bool IsWritable(string folder)
+        /// <summary>이번 실행에서 1.3 이하 포터블 판의 설정을 옮겨 왔으면 그 원래 파일 경로. 아니면 null.</summary>
+        public static string MigratedFrom { get; private set; }
+
+        /// <summary>
+        /// 1.3 이하 포터블 판의 설정(exe 옆 WinDeckData, 또는 마지막으로 쓴 WinDeckData 폴더)이 지금 설정보다 새로우면 옮겨 온다.
+        /// 지금 설정은 먼저 백업한다. 원래 폴더는 지우지 않는다. Load() 보다 먼저 부른다.
+        /// </summary>
+        public static void MigrateLegacyPortable()
         {
+            MigratedFrom = null;
             try
             {
-                // 이름이 길면 깊은 폴더에서 경로 길이 제한(260자)에 걸려 포터블 폴더를 못 쓰는 것으로 잘못 판단한다.
-                string probe = Path.Combine(folder, ".wt" + Guid.NewGuid().ToString("N").Substring(0, 8));
-                File.WriteAllText(probe, "");
-                File.Delete(probe);
-                return true;
+                string target = Path.GetFullPath(ConfigPath);
+                var sources = new List<string> { Path.Combine(AppDir, PortableFolderName, "config.json") };
+                string last = LastLocation();
+                if (!string.IsNullOrEmpty(last)
+                    && string.Equals(Path.GetFileName(last.TrimEnd('\\')), PortableFolderName, StringComparison.OrdinalIgnoreCase))
+                    sources.Add(Path.Combine(last, "config.json"));
+
+                string best = null;
+                DateTime bestTime = DateTime.MinValue;
+                foreach (string s in sources)
+                {
+                    string full;
+                    try { full = Path.GetFullPath(s); }
+                    catch (Exception) { continue; }
+                    if (string.Equals(full, target, StringComparison.OrdinalIgnoreCase) || !File.Exists(full)) continue;
+                    DateTime t = File.GetLastWriteTimeUtc(full);
+                    if (t > bestTime)
+                    {
+                        best = full;
+                        bestTime = t;
+                    }
+                }
+                if (best == null) return;
+                if (File.Exists(target) && File.GetLastWriteTimeUtc(target) >= bestTime) return; // 지금 설정이 더 새롭다
+                Import(best); // 읽을 수 있는 설정 파일인지 먼저 확인 (깨진 파일이면 옮기지 않는다)
+                Directory.CreateDirectory(Dir);
+                if (File.Exists(target)) BackupFile(target, "before_migration");
+                File.Copy(best, target, true);
+                MigratedFrom = best;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                return false;
+                ErrorLog.Write(ex);
             }
         }
 

@@ -28,7 +28,7 @@ namespace WinDeck
             get { return IsTest ? "." + TestId : ""; }
         }
 
-        // 설치 파일(installer\WinDeck.iss)도 같은 이름을 쓴다. 바꿀 때 함께 고칠 것.
+        // 설치·제거 프로그램(src\Setup)도 이 파일을 함께 컴파일해 같은 이름을 쓴다.
         public static string MutexName
         {
             get { return @"Local\WinDeck.SingleInstance" + Suffix; }

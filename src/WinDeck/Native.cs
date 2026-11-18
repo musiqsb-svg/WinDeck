@@ -45,6 +45,38 @@ namespace WinDeck
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
         [DllImport("user32.dll")]
+        public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
+
+        [DllImport("user32.dll")]
+        public static extern bool BringWindowToTop(IntPtr hWnd);
+
+        /// <summary>
+        /// 창을 맨 앞으로 가져와 키보드 입력을 받게 한다.
+        /// 끌어 놓기 직후에는 끌어온 프로그램이 앞 창이라 SetForegroundWindow 만으로는 막힐 수 있어, 그 창의 입력 상태에 잠시 붙는다.
+        /// </summary>
+        public static void ForceForeground(IntPtr hWnd)
+        {
+            IntPtr fg = GetForegroundWindow();
+            if (fg == hWnd) return;
+            uint pid;
+            uint fgThread = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, out pid);
+            uint me = GetCurrentThreadId();
+            bool attached = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
+            try
+            {
+                BringWindowToTop(hWnd);
+                SetForegroundWindow(hWnd);
+            }
+            finally
+            {
+                if (attached) AttachThreadInput(me, fgThread, false);
+            }
+        }
+
+        [DllImport("user32.dll")]
         public static extern bool IsWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]

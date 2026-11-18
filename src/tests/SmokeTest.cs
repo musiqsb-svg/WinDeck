@@ -33,11 +33,31 @@ static partial class SmokeTest
 
     static int fails;
     static string outDir;
+    /// <summary>build.ps1 결과가 있는 프로젝트 폴더 (WinDeck 설치.exe, WinDeck 제거.exe, app\).</summary>
+    static string packageDir;
+    /// <summary>실제 1.3.0 포터블 zip (1.3 → 새 버전 자동 업데이트 점검용). 없으면 null.</summary>
+    static string old13Zip;
 
     static void Check(bool ok, string name, string detail = null)
     {
         Console.WriteLine((ok ? "PASS  " : "FAIL  ") + name + (ok || detail == null ? "" : "   -> " + detail));
         if (!ok) fails++;
+    }
+
+    /// <summary>점검 하나가 예외로 멈춰도 나머지 점검은 계속한다 (예외는 실패로 센다).</summary>
+    static void Safe(string name, Action test)
+    {
+        try
+        {
+            test();
+        }
+        catch (Exception ex)
+        {
+            string text;
+            try { text = ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace; }
+            catch (Exception) { text = ex.GetType().Name; }
+            Check(false, name + " (exception)", text);
+        }
     }
 
     static void Pump(int ms)
@@ -62,6 +82,10 @@ static partial class SmokeTest
 
         outDir = args[0];
         Directory.CreateDirectory(outDir);
+        int pkgArg = Array.IndexOf(args, "--package");
+        packageDir = pkgArg >= 0 && pkgArg + 1 < args.Length ? args[pkgArg + 1] : null;
+        int oldArg = Array.IndexOf(args, "--old13");
+        old13Zip = oldArg >= 0 && oldArg + 1 < args.Length ? args[oldArg + 1] : null;
         string realSettings = RealSettingsFingerprint();
         ConfigStore.Dir = Path.Combine(outDir, "cfg");
         if (Directory.Exists(ConfigStore.Dir)) Directory.Delete(ConfigStore.Dir, true);
@@ -69,22 +93,24 @@ static partial class SmokeTest
         using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
             Console.WriteLine("Screen DPI: " + g.DpiX + "  (scale " + (g.DpiX / 96f) + ")");
 
-        TestConfig();
-        TestDistribution();
-        TestKeyCombo();
-        TestHotkeys();
-        TestIconLibrary();
-        TestRender();
-        TestHotkeyDispatch();
-        TestV12();
-        TestV12Render();
-        TestFinalQa();
-        TestV13();
-        if (args.Contains("--actions")) TestRealActions();
-        if (args.Contains("--input")) TestInput();
-        if (args.Contains("--e2e")) TestEndToEnd();
+        Safe("config", TestConfig);
+        Safe("distribution", TestDistribution);
+        Safe("key combo", TestKeyCombo);
+        Safe("hotkeys", TestHotkeys);
+        Safe("icon library", TestIconLibrary);
+        Safe("render", TestRender);
+        Safe("hotkey dispatch", TestHotkeyDispatch);
+        Safe("v12", TestV12);
+        Safe("v12 render", TestV12Render);
+        Safe("final qa", TestFinalQa);
+        Safe("v13", TestV13);
+        Safe("v14", TestV14);
+        if (packageDir != null) Safe("setup", () => TestSetup(packageDir));
+        if (args.Contains("--actions")) Safe("real actions", TestRealActions);
+        if (args.Contains("--input")) Safe("input", TestInput);
+        if (args.Contains("--e2e")) Safe("end-to-end", TestEndToEnd);
         int proc = Array.IndexOf(args, "--process");
-        if (proc >= 0 && proc + 1 < args.Length) TestProcesses(args[proc + 1]);
+        if (proc >= 0 && proc + 1 < args.Length) Safe("processes", () => TestProcesses(args[proc + 1]));
         Check(RealSettingsFingerprint() == realSettings, "user's real settings (%APPDATA%\\WinDeck) untouched by the tests");
 
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
@@ -151,12 +177,16 @@ static partial class SmokeTest
             ConfigStore.AppDir = app;
             ConfigStore.Dir = null;
             string appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WinDeck");
-            Check(ConfigStore.Dir == appData && !ConfigStore.IsPortable, "without WinDeckData folder settings go to %APPDATA%", ConfigStore.Dir);
+            Check(ConfigStore.Dir == appData, "settings go to %APPDATA%\\WinDeck", ConfigStore.Dir);
 
-            string data = Path.Combine(app, ConfigStore.PortableFolderName);
-            Directory.CreateDirectory(data);
+            Directory.CreateDirectory(Path.Combine(app, ConfigStore.PortableFolderName));
             ConfigStore.Dir = null;
-            Check(ConfigStore.Dir == data && ConfigStore.IsPortable, "WinDeckData folder next to exe enables portable mode", ConfigStore.Dir);
+            Check(ConfigStore.Dir == appData, "1.4: a WinDeckData folder next to the exe no longer makes a portable copy", ConfigStore.Dir);
+
+            // 아래는 실제 %APPDATA% 대신 점검 폴더에서
+            string data = Path.Combine(outDir, "fakeapp_settings");
+            if (Directory.Exists(data)) Directory.Delete(data, true);
+            ConfigStore.Dir = data;
 
             AppConfig team = AppConfig.CreateDefault();
             team.Pages[0].Name = "팀 공용";
@@ -170,7 +200,7 @@ static partial class SmokeTest
             Check(ConfigStore.IsNew && first.Pages[0].Name == "팀 공용" && first.Pages[0].Buttons[0].Title == "공유 드라이브",
                 "first run starts from team defaults file", first.Pages[0].Name);
             Check(!first.HasPosition && first.CurrentPage == 0, "team defaults do not carry window position or page");
-            Check(File.Exists(Path.Combine(data, "config.json")), "portable config saved next to exe");
+            Check(File.Exists(Path.Combine(data, "config.json")), "config saved in the settings folder");
 
             first.Pages[0].Name = "내 설정";
             ConfigStore.Save(first);
@@ -904,6 +934,8 @@ static partial class SmokeTest
         page.Buttons[2] = new DeckButton { Title = "Replace", Action = ActionTypes.Text, Target = "교체됨" };
         page.Buttons[3] = new DeckButton { Title = "Paste", Action = ActionTypes.Text, Target = "+붙여넣기", UsePaste = true, PressEnter = true };
         page.Buttons[4] = new DeckButton { Title = "Page2", Action = ActionTypes.Page, Target = cfg.Pages[1].Id };
+        // 끌어 옮기기 점검용: 실행되면 페이지가 바뀌므로, 끄는 동안 실행되지 않았는지 알 수 있다.
+        cfg.Pages[1].Buttons[7] = new DeckButton { Title = "ToPage1", Action = ActionTypes.Page, Target = cfg.Pages[0].Id };
         cfg.HasPosition = true;
         cfg.WindowX = 900;
         cfg.WindowY = 180;
@@ -936,16 +968,9 @@ static partial class SmokeTest
             if (ClickKey(deck, 4, state))
             {
                 Check(deck.Config.CurrentPage == 1, "page key switches to page 2");
-                // 마우스 버튼을 누르지 않은 채 DoDragDrop 하면 커서 위치에 즉시 드롭된다.
-                DropOnKey(deck, 0, new DataObject(DataFormats.FileDrop, new[] { outDir }));
-                DeckButton dropped = deck.Config.Pages[1].Buttons[0];
-                Check(dropped.Action == ActionTypes.Folder && dropped.Target == outDir && dropped.Title == Path.GetFileName(outDir),
-                    "dropping a folder on an empty key creates a folder button", dropped.Action + " " + dropped.Title);
-                DropOnKey(deck, 1, new DataObject(DataFormats.UnicodeText, "https://www.naver.com/news"));
-                dropped = deck.Config.Pages[1].Buttons[1];
-                Check(dropped.Action == ActionTypes.Url && dropped.Title == "naver.com", "dropping a link creates a link button", dropped.Action + " " + dropped.Title);
 
                 // 버튼 단축키: 다른 페이지(0)에 있는 문장 버튼이 패널을 건드리지 않고 앞 창에 입력되는지
+                // (끌어 놓기 뒤의 이름 입력 창이 앞 창이 되므로 그보다 먼저 시험한다)
                 if (ReadState(state).StartsWith("FG"))
                 {
                     deck.OnHotkey(new HotkeyEntry { Kind = HotkeyKind.Button, PageIndex = 0, ButtonIndex = 0 });
@@ -954,6 +979,19 @@ static partial class SmokeTest
                     Check(s == "FG|교체됨+붙여넣기\r\n클릭 입력 OK", "button hotkey types into the focused app", s);
                     Check(deck.Config.CurrentPage == 1, "button hotkey does not switch the visible page");
                 }
+
+                // 마우스 버튼을 누르지 않은 채 DoDragDrop 하면 커서 위치에 즉시 드롭된다.
+                AnswerNextInput(KeepInput);
+                DropOnKey(deck, 0, new DataObject(DataFormats.FileDrop, new[] { outDir }));
+                DeckButton dropped = deck.Config.Pages[1].Buttons[0];
+                Check(dropped.Action == ActionTypes.Folder && dropped.Target == outDir && dropped.Title == Path.GetFileName(outDir),
+                    "dropping a folder on an empty key creates a folder button", dropped.Action + " " + dropped.Title);
+                AnswerNextInput(KeepInput);
+                DropOnKey(deck, 1, new DataObject(DataFormats.UnicodeText, "https://www.naver.com/news"));
+                dropped = deck.Config.Pages[1].Buttons[1];
+                Check(dropped.Action == ActionTypes.Url && dropped.Title == "naver.com", "dropping a link creates a link button", dropped.Action + " " + dropped.Title);
+
+                TestMouseMove(deck);
             }
         }
         finally

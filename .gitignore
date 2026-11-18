@@ -1,5 +1,7 @@
-# 빌드 결과물 (build.bat 로 다시 만들 수 있음)
-build/
-dist/
+# 빌드 결과물 (src\build.bat 로 다시 만들 수 있음). git 에 넣지 않고 릴리스 첨부 파일로 배포한다.
+/app/
+/WinDeck 설치.exe
+/WinDeck 제거.exe
+/src/build/
+/src/release/
 *.tmp
-release/

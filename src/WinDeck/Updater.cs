@@ -23,9 +23,9 @@ namespace WinDeck
     /// <summary>받아서 검사까지 끝난 업데이트.</summary>
     public class PreparedUpdate
     {
-        /// <summary>true: 설치 파일 실행, false: 포터블 exe 교체.</summary>
+        /// <summary>1.4 부터 늘 true (설치 파일 실행).</summary>
         public bool Installer;
-        /// <summary>설치 파일 경로, 또는 새 파일을 풀어 둔 폴더.</summary>
+        /// <summary>받아서 검사한 설치 파일 경로.</summary>
         public string Path;
         public string Version;
     }
@@ -37,7 +37,8 @@ namespace WinDeck
 
     /// <summary>
     /// 새 버전 확인과 설치. 받은 파일은 릴리스에 함께 올린 SHA-256 목록과 파일 버전으로 검사한 뒤에만 쓴다.
-    /// 설치본은 설치 파일을 조용히 실행하고(끝나면 다시 실행), 포터블은 exe 만 바꿔 다시 실행한다 (WinDeckData 는 그대로).
+    /// 설치 파일을 조용히 실행하고, 설치가 끝나면 설치한 WinDeck 이 다시 켜진다 (설정 %APPDATA%\WinDeck 은 그대로).
+    /// 릴리스의 포터블 zip 은 1.3 이하 포터블 판의 자동 업데이트를 위해서만 올린다.
     /// </summary>
     public static class Updater
     {
@@ -72,7 +73,12 @@ namespace WinDeck
         /// <summary>설치 파일로 설치한 WinDeck 인지 (아니면 포터블·단독 exe).</summary>
         public static bool IsInstalled
         {
-            get { return File.Exists(System.IO.Path.Combine(ConfigStore.AppDir, "unins000.exe")); }
+            get
+            {
+                // 1.4 설치 프로그램으로 설치한 곳, 또는 1.3 이하 Inno Setup 으로 설치한 곳
+                return InstallInfo.IsInstalledAppDir(ConfigStore.AppDir)
+                    || File.Exists(System.IO.Path.Combine(ConfigStore.AppDir, "unins000.exe"));
+            }
         }
 
         // ------------------------------------------------------------------ 확인
@@ -293,18 +299,16 @@ namespace WinDeck
         }
 
         /// <summary>
-        /// 이 WinDeck 에 맞는 파일(설치본이면 설치 파일, 아니면 포터블 zip)을 받아 SHA-256·버전을 검사한다.
+        /// 릴리스의 설치 파일(WinDeck-Setup-x.y.z.exe)을 받아 SHA-256·버전을 검사한다.
+        /// 1.4 부터는 설치하지 않고 쓰던 WinDeck 도 이 설치 파일로 설치한다 (포터블 판 없음).
         /// report(상태 문구, 진행률 0~100 또는 -1).
         /// </summary>
         public static PreparedUpdate Prepare(UpdateInfo info, Action<string, int> report, Func<bool> cancelled)
         {
-            bool installer = IsInstalled;
-            string url = installer ? info.SetupUrl : info.PortableUrl;
-            string name = installer ? info.SetupName : info.PortableName;
-            if (url == null) throw new UpdateException("릴리스에서 " + (installer ? "설치 파일" : "포터블 파일") + "을 찾지 못했습니다.");
+            string url = info.SetupUrl;
+            string name = info.SetupName;
+            if (url == null) throw new UpdateException("릴리스에서 설치 파일을 찾지 못했습니다.");
             if (info.ChecksumUrl == null) throw new UpdateException("릴리스에 검사용 SHA-256 목록이 없어 자동으로 설치할 수 없습니다.");
-            if (!installer && !CanWrite(ConfigStore.AppDir))
-                throw new UpdateException("WinDeck 폴더에 쓸 수 없어 자동으로 바꿀 수 없습니다.\n" + ConfigStore.AppDir);
 
             string work = System.IO.Path.Combine(WorkDir, info.Version);
             if (Directory.Exists(work)) Directory.Delete(work, true);
@@ -323,92 +327,21 @@ namespace WinDeck
             if (!string.Equals(Sha256(file), expected, StringComparison.OrdinalIgnoreCase))
                 throw new UpdateException("받은 파일이 손상되었거나 릴리스와 다릅니다 (SHA-256 불일치). 설치하지 않습니다.");
 
-            if (installer)
-            {
-                CheckFileVersion(file, info.Version);
-                return new PreparedUpdate { Installer = true, Path = file, Version = info.Version };
-            }
-
-            string staging = System.IO.Path.Combine(work, "files");
-            Directory.CreateDirectory(staging);
-            ExtractPortable(file, staging);
-            string exe = System.IO.Path.Combine(staging, "WinDeck.exe");
-            if (!File.Exists(exe)) throw new UpdateException("포터블 파일 안에 WinDeck.exe 가 없습니다.");
-            CheckFileVersion(exe, info.Version);
-            return new PreparedUpdate { Installer = false, Path = staging, Version = info.Version };
-        }
-
-        /// <summary>포터블 zip 의 맨 위 폴더에서 WinDeck.exe 와 안내 .txt 만 꺼낸다 (WinDeckData·팀 기본 설정은 건드리지 않음).</summary>
-        public static void ExtractPortable(string zip, string staging)
-        {
-            using (ZipArchive za = ZipFile.OpenRead(zip))
-            {
-                foreach (ZipArchiveEntry e in za.Entries)
-                {
-                    string full = e.FullName.Replace('\\', '/');
-                    int slash = full.IndexOf('/');
-                    string rel = slash >= 0 ? full.Substring(slash + 1) : full;
-                    if (rel.Length == 0 || rel.Contains("/") || e.Name.Length == 0) continue;
-                    string lower = rel.ToLowerInvariant();
-                    if (lower != "windeck.exe" && !lower.EndsWith(".txt")) continue;
-                    e.ExtractToFile(System.IO.Path.Combine(staging, rel), true);
-                }
-            }
-        }
-
-        static bool CanWrite(string dir)
-        {
-            try
-            {
-                string probe = System.IO.Path.Combine(dir, ".wu" + Guid.NewGuid().ToString("N").Substring(0, 8));
-                File.WriteAllText(probe, "");
-                File.Delete(probe);
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
+            CheckFileVersion(file, info.Version);
+            return new PreparedUpdate { Installer = true, Path = file, Version = info.Version };
         }
 
         // ------------------------------------------------------------------ 설치
 
         /// <summary>
-        /// 준비한 업데이트를 시작한다. 이 함수가 끝나면 지금 WinDeck 은 바로 종료해야 한다.
-        /// 설치본: 설치 파일을 조용히 실행 (설치가 끝나면 WinDeck 을 다시 실행).
-        /// 포터블: 실행 중인 exe 이름을 .old 로 바꾸고 새 exe 를 넣은 뒤, 지금 프로세스가 끝나기를 기다리는 새 WinDeck 을 실행.
+        /// 준비한 설치 파일을 조용히 실행한다 (설치가 끝나면 설치한 WinDeck 이 다시 켜진다).
+        /// 이 함수가 끝나면 지금 WinDeck 은 바로 종료해야 한다. 설치 파일은 실행 중인 WinDeck 이 끝나기를 기다린다.
         /// </summary>
         public static void Launch(PreparedUpdate p)
         {
-            if (p.Installer)
-            {
-                string args = "/SILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1";
-                if (AppInstance.IsTest) args += " /INSTANCE=" + AppInstance.TestId;
-                Process.Start(new ProcessStartInfo(p.Path, args) { UseShellExecute = false });
-                return;
-            }
-
-            string exe = Application.ExecutablePath;
-            string dir = System.IO.Path.GetDirectoryName(exe);
-            string old = exe + ".old";
-            if (File.Exists(old)) File.Delete(old);
-            File.Move(exe, old); // 실행 중인 exe 도 이름은 바꿀 수 있다
-            try
-            {
-                File.Copy(System.IO.Path.Combine(p.Path, "WinDeck.exe"), exe);
-            }
-            catch (Exception)
-            {
-                try { File.Move(old, exe); }
-                catch (Exception) { }
-                throw;
-            }
-            foreach (string txt in Directory.GetFiles(p.Path, "*.txt"))
-            {
-                try { File.Copy(txt, System.IO.Path.Combine(dir, System.IO.Path.GetFileName(txt)), true); }
-                catch (Exception) { }
-            }
-            Process.Start(new ProcessStartInfo(exe, "--restart") { UseShellExecute = false, WorkingDirectory = dir });
+            string args = "/SILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1";
+            if (AppInstance.IsTest) args += " /INSTANCE=" + AppInstance.TestId;
+            Process.Start(new ProcessStartInfo(p.Path, args) { UseShellExecute = false });
         }
 
         /// <summary>업데이트 뒤 남은 WinDeck.exe.old 와 받은 파일을 지운다 (앞 프로세스가 끝날 때까지 몇 번 다시 시도).</summary>

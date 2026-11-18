@@ -23,10 +23,16 @@ namespace WinDeck
         public bool SkipRequested { get; private set; }
 
         public UpdateForm(UpdateInfo info)
+            : this(info, false)
+        {
+        }
+
+        /// <param name="install">true: 설치하지 않고 쓰던 WinDeck 을 설치한다 (같은 버전이어도). false: 새 버전으로 업데이트.</param>
+        public UpdateForm(UpdateInfo info, bool install)
         {
             this.info = info;
             SuspendLayout();
-            Text = "WinDeck 업데이트";
+            Text = install ? "WinDeck 설치" : "WinDeck 업데이트";
             Font = new Font(Theme.UiFontName, 9f);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -39,15 +45,16 @@ namespace WinDeck
 
             Controls.Add(new Label
             {
-                Text = "새 버전 v" + info.Version + " 이 나왔습니다",
+                Text = install ? "WinDeck v" + info.Version + " 설치" : "새 버전 v" + info.Version + " 이 나왔습니다",
                 Font = new Font(Theme.UiFontName, 11f, FontStyle.Bold),
                 AutoSize = true,
                 Location = new Point(16, 14)
             });
             Controls.Add(new Label
             {
-                Text = "지금 쓰는 버전 v" + AppInfo.Version + "  ·  "
-                    + (Updater.IsInstalled ? "설치 파일로 업데이트합니다" : "포터블: 프로그램 파일만 바꾸고 설정은 그대로 둡니다"),
+                Text = install
+                    ? "설치 파일을 받아 " + InstallInfo.InstallDir + " 에 설치합니다. 버튼 설정은 그대로 씁니다."
+                    : "지금 쓰는 버전 v" + AppInfo.Version + "  ·  설치 파일로 업데이트합니다",
                 AutoSize = false,
                 AutoEllipsis = true,
                 Size = new Size(488, 20),
@@ -88,8 +95,9 @@ namespace WinDeck
 
             btnSkip = new Button { Text = "이 버전 건너뛰기", Location = new Point(16, 340), Size = new Size(130, 30) };
             btnLater = new Button { Text = "나중에", Location = new Point(318, 340), Size = new Size(88, 30), DialogResult = DialogResult.Cancel };
-            btnUpdate = new Button { Text = "지금 업데이트", Location = new Point(412, 340), Size = new Size(92, 30) };
+            btnUpdate = new Button { Text = install ? "지금 설치" : "지금 업데이트", Location = new Point(412, 340), Size = new Size(92, 30) };
             btnUpdate.Font = new Font(Font, FontStyle.Bold);
+            btnSkip.Visible = !install;
             btnSkip.Click += delegate
             {
                 SkipRequested = true;

@@ -23,7 +23,6 @@ static partial class SmokeTest
         Environment.SetEnvironmentVariable("WINDECK_INSTANCE", testId);
         try
         {
-            TestDeepPortable();
             TestStaleDetection();
             TestBackups();
             try { TestV13Render(); }
@@ -50,20 +49,6 @@ static partial class SmokeTest
         if (!Directory.Exists(dir)) return "(none)";
         return string.Join("\n", Directory.GetFiles(dir, "*", SearchOption.AllDirectories).OrderBy(f => f)
             .Select(f => f + "|" + new FileInfo(f).Length + "|" + File.GetLastWriteTimeUtc(f).Ticks).ToArray());
-    }
-
-    static void TestDeepPortable()
-    {
-        // WinDeckData\config.json.tmp 까지 260자 안에 드는 깊은 폴더 (예전의 긴 확인용 파일 이름은 넘쳐서 %APPDATA% 로 빠졌음)
-        string app = Path.Combine(outDir, "v13_deep");
-        if (Directory.Exists(app)) Directory.Delete(app, true);
-        while (Path.Combine(app, "WinDeckData", "config.json.tmp").Length < 250) app = Path.Combine(app, "d");
-        Directory.CreateDirectory(Path.Combine(app, "WinDeckData"));
-        ConfigStore.AppDir = app;
-        ConfigStore.Dir = null;
-        Check(ConfigStore.IsPortable, "portable mode works in a deep folder (" + Path.Combine(app, "WinDeckData", "config.json").Length + " chars)", ConfigStore.Dir);
-        ConfigStore.AppDir = null;
-        ConfigStore.Dir = null;
     }
 
     static string FreshDir(string name)
@@ -234,6 +219,10 @@ static partial class SmokeTest
         FoundConfig f = ConfigStore.FindPreviousConfig();
         Check(ConfigStore.IsNew && f != null && f.IsNewLocation && f.Config.Pages[0].Name == "옛 포터블 설정",
             "first run in a new portable folder finds the previous portable settings", f == null ? "none" : f.Path);
+        // 1.3 포터블이 마지막으로 쓴 위치를 기록해 둔 경우
+        string lastData = Path.Combine(newApp, "WinDeckData");
+        ConfigStore.Dir = lastData;
+        ConfigStore.Export(AppConfig.CreateDefault(), Path.Combine(lastData, "config.json"));
         ConfigStore.RememberLocation();
 
         // 이미 설정이 있는 곳: 마지막으로 쓴 다른 위치가 더 최근일 때만 알려준다.
@@ -370,26 +359,28 @@ static partial class SmokeTest
         catch (UpdateException) { threw = true; }
         Check(threw, "file version mismatch is refused");
 
-        // 포터블 업데이트 준비: file:// 로 받아서 검사하고 exe 만 꺼낸다.
-        string zip = Path.Combine(dir, "WinDeck-Portable-" + AppInfo.Version + ".zip");
-        MakePortableZip(zip, winDeckExe, "안내 v13");
+        // 업데이트 준비: file:// 로 설치 파일을 받아서 SHA-256 과 파일 버전을 검사한다 (1.4: 설치하지 않은 WinDeck 도 설치 파일로).
+        string zip = Path.Combine(dir, "WinDeck-Setup-" + AppInfo.Version + ".exe");
+        File.Copy(winDeckExe, zip, true); // 파일 버전이 같은 exe 를 설치 파일 대신 쓴다 (실행하지 않음)
         string sumsFile = Path.Combine(dir, "WinDeck-SHA256-" + AppInfo.Version + ".txt");
         File.WriteAllText(sumsFile, Updater.Sha256(zip) + "  " + Path.GetFileName(zip) + "\n");
         string app = Path.Combine(dir, "app");
         Directory.CreateDirectory(app);
         ConfigStore.AppDir = app;
+        Check(!Updater.IsInstalled, "a WinDeck outside the install folder counts as not installed");
         var local = new UpdateInfo
         {
             Version = AppInfo.Version,
-            PortableName = Path.GetFileName(zip),
-            PortableUrl = new Uri(zip).AbsoluteUri,
+            SetupName = Path.GetFileName(zip),
+            SetupUrl = new Uri(zip).AbsoluteUri,
+            PortableName = "WinDeck-Portable-" + AppInfo.Version + ".zip",
+            PortableUrl = new Uri(Path.Combine(dir, "nothing.zip")).AbsoluteUri,
             ChecksumUrl = new Uri(sumsFile).AbsoluteUri
         };
         var steps = new List<string>();
         PreparedUpdate p = Updater.Prepare(local, (s, n) => steps.Add(s), null);
-        Check(!p.Installer && File.Exists(Path.Combine(p.Path, "WinDeck.exe")) && File.Exists(Path.Combine(p.Path, "WinDeck 사용 안내.txt"))
-            && !Directory.Exists(Path.Combine(p.Path, "WinDeckData")) && !File.Exists(Path.Combine(p.Path, "WinDeck.defaults.json")),
-            "portable update unpacks only the exe and guide (settings folder untouched)");
+        Check(p.Installer && File.Exists(p.Path) && Path.GetFileName(p.Path) == Path.GetFileName(zip),
+            "update of a WinDeck that is not installed uses the setup, not the portable zip");
         Check(steps.Any(s => s.StartsWith("받는 중")) && steps.Last().Contains("검사"), "download progress is reported");
 
         File.WriteAllText(sumsFile, new string('0', 64) + "  " + Path.GetFileName(zip) + "\n");
@@ -518,134 +509,6 @@ static partial class SmokeTest
         c.WindowY = 40;
         ConfigStore.Save(c);
         return app;
-    }
-
-    static void TestProcesses(string fakeRelease)
-    {
-        string savedDir = ConfigStore.Dir;
-        string testId = "proc" + Process.GetCurrentProcess().Id;
-        Environment.SetEnvironmentVariable("WINDECK_INSTANCE", testId);
-        var started = new List<Process>();
-        try
-        {
-            // 0) 새 폴더에 푼 포터블: 처음 실행할 때 예전 포터블 설정을 찾아 묻고, [예]면 그 설정으로 시작 (1.2 → 1.3 되돌아감 원인)
-            FreshDir("v13_proc_portable");
-            string oldApp = MakeAppCopy(@"v13_proc_portable\WinDeck-Portable-1.2.0\WinDeck", "예전 포터블 설정");
-            File.SetLastWriteTime(Path.Combine(oldApp, @"WinDeckData\config.json"), DateTime.Now.AddMinutes(10));
-            string newApp = FreshDir(@"v13_proc_portable\WinDeck-Portable-1.3.0\WinDeck");
-            Directory.CreateDirectory(Path.Combine(newApp, "WinDeckData"));
-            string newExe = Path.Combine(newApp, "WinDeck.exe");
-            File.Copy(typeof(AppInfo).Assembly.Location, newExe);
-            Process first = StartApp(newExe, "", null);
-            started.Add(first);
-            IntPtr ask = FindProcessWindow(first.Id, "WinDeck - 이전 설정", 15000);
-            Check(ask != IntPtr.Zero, "new portable folder asks to load the previous portable settings");
-            if (ask != IntPtr.Zero)
-            {
-                // 메시지 상자는 활성 창이 아니면 BM_CLICK 을 무시하므로, 단추 ID 로 WM_COMMAND 를 보낸다.
-                IntPtr yes = FindChild(ask, t => t.StartsWith("예"));
-                Check(yes != IntPtr.Zero, "yes button on the previous-settings question");
-                IntPtr r;
-                SendMessageTimeout(ask, 0x0111 /* WM_COMMAND */, (IntPtr)GetDlgCtrlID(yes), yes, 0x0002, 5000, out r);
-                Check(WaitFor(() =>
-                {
-                    try { return ReadShared(Path.Combine(newApp, @"WinDeckData\config.json")).Pages[0].Name == "예전 포터블 설정"; }
-                    catch (Exception) { return false; }
-                }, 10000), "answering yes loads the previous settings into the new folder");
-            }
-            Check(RunApp(newExe, "--exit", 15000) == 0 && first.WaitForExit(5000), "new portable exits on request");
-
-            // 1) --exit: 저장하고 스스로 끝난다
-            string app = MakeAppCopy("v13_proc_exit", "종료 점검");
-            string exe = Path.Combine(app, "WinDeck.exe");
-            string config = Path.Combine(app, @"WinDeckData\config.json");
-            Check(RunApp(exe, "--exit", 5000) == 0, "--exit with nothing running returns at once");
-            Process p = StartApp(exe, "", null);
-            started.Add(p);
-            Check(WaitFor(AppInstance.IsRunning, 10000), "test instance starts");
-            Thread.Sleep(1500);
-            DateTime before = File.GetLastWriteTimeUtc(config);
-            var sw = Stopwatch.StartNew();
-            Check(RunApp(exe, "--exit", 15000) == 0 && p.WaitForExit(5000), "--exit closes the running WinDeck", sw.ElapsedMilliseconds + "ms");
-            Check(p.HasExited && p.ExitCode == 0 && File.GetLastWriteTimeUtc(config) > before, "WinDeck saved its settings before exiting");
-            Check(ReadShared(config).Pages[0].Name == "종료 점검", "settings intact after graceful exit");
-            Check(Directory.GetFiles(Path.Combine(app, @"WinDeckData\backups"), "daily_*.json").Length == 1, "daily backup made at start-up");
-
-            // 2) 업데이트 창이 열려 있어도 --exit 로 끝난다
-            string releaseJson = Path.Combine(fakeRelease, "release.json");
-            string url = new Uri(releaseJson).AbsoluteUri;
-            p = StartApp(exe, "", url);
-            started.Add(p);
-            WaitFor(AppInstance.IsRunning, 10000);
-            RunApp(exe, "--check-update", 5000);
-            IntPtr dlg = FindProcessWindow(p.Id, "WinDeck 업데이트", 15000);
-            Check(dlg != IntPtr.Zero, "--check-update opens the update window for a newer release");
-            if (dlg != IntPtr.Zero)
-                Check(FindChild(dlg, t => t.StartsWith("새 버전 v99.0.0")) != IntPtr.Zero, "update window names the new version");
-            Check(RunApp(exe, "--exit", 15000) == 0 && p.WaitForExit(5000), "--exit works while a dialog is open");
-
-            // 3) SHA-256 이 맞지 않으면 설치하지 않는다
-            p = StartApp(exe, "", new Uri(Path.Combine(fakeRelease, "release-bad.json")).AbsoluteUri);
-            started.Add(p);
-            WaitFor(AppInstance.IsRunning, 10000);
-            RunApp(exe, "--check-update", 5000);
-            dlg = FindProcessWindow(p.Id, "WinDeck 업데이트", 15000);
-            if (dlg != IntPtr.Zero)
-            {
-                Click(dlg, "지금 업데이트");
-                bool failed = WaitFor(() => FindChild(dlg, t => t.StartsWith("업데이트하지 못했습니다")) != IntPtr.Zero, 15000);
-                Check(failed && !p.HasExited, "corrupted download is refused and WinDeck keeps running");
-                Check(Updater.VersionFromTag(FileVersionInfo.GetVersionInfo(exe).FileVersion) == AppInfo.Version, "exe unchanged after refused update");
-            }
-            else Check(false, "update window for bad release");
-            RunApp(exe, "--exit", 15000);
-            p.WaitForExit(5000);
-
-            // 4) 포터블 업데이트: 받기 → 검사 → exe 교체 → 다시 실행, 설정은 그대로
-            app = MakeAppCopy("v13_proc_update", "업데이트 점검");
-            exe = Path.Combine(app, "WinDeck.exe");
-            config = Path.Combine(app, @"WinDeckData\config.json");
-            string pagesBefore = ConfigStore.Describe(ConfigStore.Import(config));
-            p = StartApp(exe, "", url);
-            started.Add(p);
-            WaitFor(AppInstance.IsRunning, 10000);
-            RunApp(exe, "--check-update", 5000);
-            dlg = FindProcessWindow(p.Id, "WinDeck 업데이트", 15000);
-            if (dlg == IntPtr.Zero)
-            {
-                Check(false, "update window for portable update");
-                return;
-            }
-            Click(dlg, "지금 업데이트");
-            Check(p.WaitForExit(20000), "old WinDeck exits after starting the update");
-            bool swapped = WaitFor(() => Updater.VersionFromTag(FileVersionInfo.GetVersionInfo(exe).FileVersion) == "99.0.0", 10000);
-            Check(swapped, "exe replaced by the new version");
-            Check(WaitFor(AppInstance.IsRunning, 15000), "new version restarted by itself");
-            Check(WaitFor(() => !File.Exists(exe + ".old"), 20000), "old exe cleaned up after restart");
-            Check(File.ReadAllText(Path.Combine(app, "WinDeck 사용 안내.txt"), Encoding.UTF8).Contains("fake-guide-99"), "guide text updated too");
-            Check(!File.Exists(Path.Combine(app, "WinDeck.defaults.json")), "team defaults file in the zip is not copied over");
-            Thread.Sleep(1500);
-            AppConfig after = ReadShared(config);
-            Check(after.Pages[0].Name == "업데이트 점검" && ConfigStore.Describe(after) == pagesBefore, "settings unchanged by the update", ConfigStore.Describe(after));
-            Check(after.SavedByVersion == "99.0.0", "new version took over the settings file", after.SavedByVersion);
-            string[] backups = Directory.GetFiles(Path.Combine(app, @"WinDeckData\backups"), "before_update_*.json");
-            Check(backups.Length >= 1, "settings backed up before the update", backups.Length.ToString());
-            Check(RunApp(exe, "--exit", 15000) == 0 && WaitFor(() => !AppInstance.IsRunning(), 5000), "updated WinDeck exits on request");
-        }
-        finally
-        {
-            foreach (Process p in started)
-                try { if (!p.HasExited) p.Kill(); }
-                catch (Exception) { }
-            foreach (Process p in Process.GetProcessesByName("WinDeck"))
-            {
-                try { if (p.MainModule.FileName.StartsWith(outDir, StringComparison.OrdinalIgnoreCase)) p.Kill(); }
-                catch (Exception) { }
-            }
-            Environment.SetEnvironmentVariable("WINDECK_INSTANCE", null);
-            DeleteTestRegistry(testId);
-            ConfigStore.Dir = savedDir;
-        }
     }
 
     static void Click(IntPtr dialog, string buttonText)

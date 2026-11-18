@@ -71,7 +71,7 @@ namespace WinDeck
         void BuildUi()
         {
             SuspendLayout();
-            Text = "WinDeck 설정  (v" + AppInfo.Version + (ConfigStore.IsPortable ? ", 포터블" : "") + ")";
+            Text = "WinDeck 설정  (v" + AppInfo.Version + (Updater.IsInstalled ? "" : ", 설치 안 함") + ")";
             Font = new Font(Theme.UiFontName, 9f);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;

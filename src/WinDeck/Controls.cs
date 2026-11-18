@@ -17,7 +17,8 @@ namespace WinDeck
     /// </summary>
     public class DeckKey : Control
     {
-        bool hover, pressed;
+        bool hover, pressed, mouseDown, moving, moveSource, moveTarget;
+        Point downPoint;
         Color flash = Color.Empty;
         readonly Timer flashTimer;
 
@@ -26,6 +27,37 @@ namespace WinDeck
 
         public event EventHandler KeyClicked;
         public event Action<int> Wheel;
+        /// <summary>버튼을 누른 채 끌기 시작했다. 이때부터 마우스를 놓아도 버튼은 실행되지 않는다.</summary>
+        public event EventHandler MoveStarted;
+        /// <summary>끄는 중 마우스 위치 (화면 좌표).</summary>
+        public event Action<DeckKey, Point> MoveDragged;
+        /// <summary>끌기가 끝났다 (화면 좌표). cancelled 이면 놓지 않고 끝났다 (다른 창이 마우스를 가져감 등).</summary>
+        public event Action<DeckKey, Point, bool> MoveEnded;
+
+        /// <summary>끌어 옮기는 중인 버튼: 빈칸처럼 그린다.</summary>
+        public bool MoveSource
+        {
+            get { return moveSource; }
+            set { if (moveSource != value) { moveSource = value; Invalidate(); } }
+        }
+
+        /// <summary>끌고 있는 버튼을 놓을 칸: 테두리를 강조한다.</summary>
+        public bool MoveTarget
+        {
+            get { return moveTarget; }
+            set { if (moveTarget != value) { moveTarget = value; Invalidate(); } }
+        }
+
+        public bool IsMoving
+        {
+            get { return moving; }
+        }
+
+        /// <summary>클릭과 끌기를 구별하는 거리 (픽셀). 손이 조금 떨려도 클릭으로 본다.</summary>
+        int MoveThreshold
+        {
+            get { return Math.Max(SystemInformation.DragSize.Width, Width / 10); }
+        }
 
         public DeckKey(int index)
         {
@@ -73,18 +105,63 @@ namespace WinDeck
             if (e.Button == MouseButtons.Left)
             {
                 pressed = true;
+                mouseDown = true;
+                downPoint = e.Location;
                 Invalidate();
             }
             base.OnMouseDown(e);
         }
 
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (!mouseDown || (Control.MouseButtons & MouseButtons.Left) == 0) return;
+            if (!moving)
+            {
+                if (Data == null || Data.IsEmpty) return; // 빈칸은 옮길 것이 없다
+                int t = MoveThreshold;
+                if (Math.Abs(e.X - downPoint.X) <= t && Math.Abs(e.Y - downPoint.Y) <= t) return;
+                moving = true;
+                pressed = false;
+                Invalidate();
+                if (MoveStarted != null) MoveStarted(this, EventArgs.Empty);
+            }
+            if (MoveDragged != null) MoveDragged(this, PointToScreen(e.Location));
+        }
+
         protected override void OnMouseUp(MouseEventArgs e)
         {
+            if (moving)
+            {
+                moving = false;
+                mouseDown = false;
+                pressed = false;
+                Invalidate();
+                base.OnMouseUp(e);
+                if (MoveEnded != null) MoveEnded(this, PointToScreen(e.Location), false);
+                return;
+            }
             bool fire = pressed && e.Button == MouseButtons.Left && ClientRectangle.Contains(e.Location);
             pressed = false;
+            mouseDown = false;
             Invalidate();
             base.OnMouseUp(e);
             if (fire && KeyClicked != null) KeyClicked(this, EventArgs.Empty);
+        }
+
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            base.OnMouseCaptureChanged(e);
+            // 왼쪽 버튼을 누른 채로 마우스를 빼앗기면 (다른 창, 메뉴 등) 끌기를 취소한다.
+            // 버튼을 놓아서 풀린 것이면 OnMouseUp 이 처리한다.
+            if (moving && !Capture && (Control.MouseButtons & MouseButtons.Left) != 0)
+            {
+                moving = false;
+                mouseDown = false;
+                pressed = false;
+                Invalidate();
+                if (MoveEnded != null) MoveEnded(this, Cursor.Position, true);
+            }
         }
 
         protected override void OnMouseWheel(MouseEventArgs e)
@@ -95,21 +172,120 @@ namespace WinDeck
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            // 옮기는 중인 버튼은 자리만 남은 빈칸처럼 그린다 (버튼 모양은 마우스를 따라다니는 창에 보인다).
+            DeckButton shown = moveSource ? null : Data;
+            bool hot = hover && !moveSource;
             var host = Parent as IBackgroundHost;
             if (host != null)
             {
                 host.PaintChildBackground(e.Graphics, this);
-                KeyRenderer.Draw(e.Graphics, ClientRectangle, Data, hover, pressed, flash, Color.Empty);
+                KeyRenderer.Draw(e.Graphics, ClientRectangle, shown, hot, pressed, flash, Color.Empty);
             }
             else
             {
-                KeyRenderer.Draw(e.Graphics, ClientRectangle, Data, hover, pressed, flash, Parent != null ? Parent.BackColor : Theme.PanelBack);
+                KeyRenderer.Draw(e.Graphics, ClientRectangle, shown, hot, pressed, flash, Parent != null ? Parent.BackColor : Theme.PanelBack);
             }
+            if (moveTarget)
+            {
+                float size = Math.Min(Width, Height) - 1f;
+                float w = Math.Max(2f, size * 0.035f);
+                var r = new RectangleF(w / 2 + 0.5f, w / 2 + 0.5f, Width - w - 1f, Height - w - 1f);
+                using (var path = Theme.RoundRect(r, Math.Max(5f, size * 0.14f)))
+                using (var pen = new Pen(Theme.Accent, w))
+                    e.Graphics.DrawPath(pen, path);
+            }
+        }
+
+        /// <summary>지금 모습 그대로의 그림 (끌 때 마우스를 따라다니는 창에 쓴다).</summary>
+        public Bitmap Snapshot()
+        {
+            var bmp = new Bitmap(Math.Max(1, Width), Math.Max(1, Height));
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                var host = Parent as IBackgroundHost;
+                if (host != null)
+                {
+                    host.PaintChildBackground(g, this);
+                    KeyRenderer.Draw(g, ClientRectangle, Data, false, false, Color.Empty, Color.Empty);
+                }
+                else
+                {
+                    KeyRenderer.Draw(g, ClientRectangle, Data, false, false, Color.Empty, Parent != null ? Parent.BackColor : Theme.PanelBack);
+                }
+            }
+            return bmp;
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing) flashTimer.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// 끌어 옮기는 버튼을 마우스 아래에 반투명하게 보여 주는 창.
+    /// 포커스와 마우스를 받지 않는다 (아래 창이 그대로 마우스를 받는다).
+    /// </summary>
+    public class DragGhost : Form
+    {
+        const int WS_EX_TRANSPARENT = 0x00000020;
+        readonly Bitmap image;
+        readonly Point grab;
+
+        public DragGhost(Bitmap image, Point grabOffset)
+        {
+            this.image = image;
+            grab = grabOffset;
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            TopMost = true;
+            Opacity = 0.82;
+            BackColor = Theme.PanelBack;
+            Size = image.Size;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT;
+                return cp;
+            }
+        }
+
+        protected override bool ShowWithoutActivation
+        {
+            get { return true; }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == Native.WM_MOUSEACTIVATE)
+            {
+                m.Result = (IntPtr)Native.MA_NOACTIVATE;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        /// <summary>마우스가 처음 잡은 버튼 위 지점에 오도록 창을 옮긴다.</summary>
+        public void MoveTo(Point screen)
+        {
+            Location = new Point(screen.X - grab.X, screen.Y - grab.Y);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.DrawImage(image, 0, 0, image.Width, image.Height);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) image.Dispose();
             base.Dispose(disposing);
         }
     }

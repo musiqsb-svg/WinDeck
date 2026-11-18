@@ -19,8 +19,21 @@ namespace WinDeck
     /// <summary>윈도우 시작 시 자동 실행 (HKCU\...\Run).</summary>
     public static class AutoStart
     {
-        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        const string ApprovedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+        // 점검 때는 시험용 키를 쓴다 (InstallInfo.RunKey). 설치 프로그램도 같은 키·값 이름을 쓴다.
+        static string RunKey
+        {
+            get { return InstallInfo.RunKey; }
+        }
+
+        static string ApprovedKey
+        {
+            get
+            {
+                return AppInstance.IsTest
+                    ? InstallInfo.RunKey + "Approved"
+                    : @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+            }
+        }
         const string ValueName = "WinDeck";
 
         static string Command
@@ -192,6 +205,12 @@ namespace WinDeck
         }
 
         public InputDialog(string title, string prompt, string initial)
+            : this(title, prompt, initial, null, 30)
+        {
+        }
+
+        /// <param name="detail">입력란 아래에 흐린 글씨로 보여 줄 한 줄 (없으면 null).</param>
+        public InputDialog(string title, string prompt, string initial, string detail, int maxLength)
         {
             SuspendLayout();
             Text = title;
@@ -202,13 +221,26 @@ namespace WinDeck
             ShowInTaskbar = false;
             ShowIcon = false;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(360, 124);
+            bool hasDetail = !string.IsNullOrEmpty(detail);
+            int buttonsTop = hasDetail ? 100 : 80;
+            ClientSize = new Size(360, buttonsTop + 44);
 
             Controls.Add(new Label { Text = prompt, AutoSize = true, Location = new Point(16, 16) });
-            box = new TextBox { Location = new Point(16, 40), Size = new Size(328, 23), Text = initial ?? "", MaxLength = 30 };
+            box = new TextBox { Location = new Point(16, 40), Size = new Size(328, 23), Text = initial ?? "", MaxLength = maxLength };
             Controls.Add(box);
-            var ok = new Button { Text = "확인", Location = new Point(168, 80), Size = new Size(84, 30), DialogResult = DialogResult.OK };
-            var cancel = new Button { Text = "취소", Location = new Point(260, 80), Size = new Size(84, 30), DialogResult = DialogResult.Cancel };
+            if (hasDetail)
+                Controls.Add(new Label
+                {
+                    Text = detail.Replace("\r", " ").Replace("\n", " "),
+                    AutoSize = false,
+                    AutoEllipsis = true,
+                    UseMnemonic = false,
+                    ForeColor = SystemColors.GrayText,
+                    Location = new Point(16, 70),
+                    Size = new Size(328, 18)
+                });
+            var ok = new Button { Text = "확인", Location = new Point(168, buttonsTop), Size = new Size(84, 30), DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "취소", Location = new Point(260, buttonsTop), Size = new Size(84, 30), DialogResult = DialogResult.Cancel };
             Controls.Add(ok);
             Controls.Add(cancel);
             AcceptButton = ok;
@@ -223,6 +255,8 @@ namespace WinDeck
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            // 패널은 포커스를 받지 않는 창이라, 이 창이 앞으로 나와야 입력한 글자가 다른 프로그램에 들어가지 않는다.
+            Native.ForceForeground(Handle);
             box.SelectAll();
             box.Focus();
         }
@@ -234,6 +268,13 @@ namespace WinDeck
                 if (d.ShowDialog(owner) != DialogResult.OK || d.Value.Length == 0) return null;
                 return d.Value;
             }
+        }
+
+        /// <summary>[취소]면 null, [확인]이면 입력한 값 (빈 문자열일 수 있음).</summary>
+        public static string AskAllowEmpty(IWin32Window owner, string title, string prompt, string initial, string detail, int maxLength)
+        {
+            using (var d = new InputDialog(title, prompt, initial, detail, maxLength))
+                return d.ShowDialog(owner) == DialogResult.OK ? d.Value : null;
         }
     }
 
