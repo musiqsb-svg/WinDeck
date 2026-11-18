@@ -37,6 +37,8 @@ if (Test-Path (Join-Path $iconDir 'manifest.tsv')) {
     $resources += "/resource:$(Join-Path $iconDir 'manifest.tsv'),WinDeck.Icons.manifest.tsv"
     Get-ChildItem $iconDir -Filter *.png | ForEach-Object { $resources += "/resource:$($_.FullName),WinDeck.Icons.$($_.Name)" }
 }
+# Copyright notice kept inside the exe (full text, Korean + English)
+$resources += "/resource:$(Join-Path $src 'NOTICE.md'),WinDeck.NOTICE.md"
 $exe = Join-Path $appOut 'WinDeck.exe'
 $running = @(Get-Process WinDeck -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
 if ($running.Count -gt 0) {
@@ -60,6 +62,7 @@ if ($compileExit -ne 0) { throw 'WinDeck compile failed.' }
 
 # 3) Files that ship next to the exe: license, guide, optional team default buttons
 Copy-Item (Join-Path $src 'LICENSE') (Join-Path $appOut 'LICENSE.txt')
+Copy-Item (Join-Path $src 'NOTICE.md') (Join-Path $appOut 'NOTICE.txt')
 Get-ChildItem (Join-Path $src 'deploy') -Filter '*.txt' | ForEach-Object { Copy-Item $_.FullName $appOut }
 $defaults = Join-Path $src 'deploy\WinDeck.defaults.json'
 if (Test-Path $defaults) {
