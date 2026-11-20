@@ -24,7 +24,7 @@ namespace WinDeck
         TabControl tabs;
         TabPage tabGeneral, tabBackground, tabHotkeys, tabPages, tabBackup;
         KeyCaptureBox txtHotkey, txtPrev, txtNext;
-        ComboBox cboSize, cboLayout, cboCount, cboBgTarget, cboFit;
+        ComboBox cboSize, cboTextSize, cboLayout, cboCount, cboBgTarget, cboFit;
         readonly int originalCount;
         CheckBox chkBgSame;
         RadioButton rbDefault, rbColor, rbImage;
@@ -97,28 +97,35 @@ namespace WinDeck
             Controls.Add(tabs);
 
             // ---- 일반
-            AddLabel(tabGeneral, "버튼 크기", 12, 19);
-            cboSize = new ComboBox { Location = new Point(150, 16), Size = new Size(170, 23), DropDownStyle = ComboBoxStyle.DropDownList };
+            AddLabel(tabGeneral, "버튼 크기", 12, 17);
+            cboSize = new ComboBox { Location = new Point(150, 14), Size = new Size(170, 23), DropDownStyle = ComboBoxStyle.DropDownList };
             cboSize.Items.AddRange(KeySizeNames);
             tabGeneral.Controls.Add(cboSize);
 
-            AddLabel(tabGeneral, "버튼 수", 12, 53);
-            cboCount = new ComboBox { Location = new Point(150, 50), Size = new Size(170, 23), DropDownStyle = ComboBoxStyle.DropDownList };
+            AddLabel(tabGeneral, "버튼 글자 크기", 12, 47);
+            cboTextSize = new ComboBox { Location = new Point(150, 44), Size = new Size(170, 23), DropDownStyle = ComboBoxStyle.DropDownList };
+            cboTextSize.Items.AddRange(TextSizes.Names);
+            tabGeneral.Controls.Add(cboTextSize);
+            AddHint(tabGeneral, "모든 버튼 기본값", 326, 47);
+            tips.SetToolTip(cboTextSize, "모든 버튼의 기본 글자 크기입니다. 버튼 편집 창에서 버튼마다 따로 정할 수도 있습니다.");
+
+            AddLabel(tabGeneral, "버튼 수", 12, 77);
+            cboCount = new ComboBox { Location = new Point(150, 74), Size = new Size(170, 23), DropDownStyle = ComboBoxStyle.DropDownList };
             cboCount.Items.AddRange(new object[] { "8개", "12개", "16개" });
             tabGeneral.Controls.Add(cboCount);
-            AddHint(tabGeneral, "모든 페이지 공통", 326, 53);
+            AddHint(tabGeneral, "모든 페이지 공통", 326, 77);
 
-            AddLabel(tabGeneral, "배치", 12, 87);
-            cboLayout = new ComboBox { Location = new Point(150, 84), Size = new Size(170, 23), DropDownStyle = ComboBoxStyle.DropDownList };
+            AddLabel(tabGeneral, "배치", 12, 107);
+            cboLayout = new ComboBox { Location = new Point(150, 104), Size = new Size(170, 23), DropDownStyle = ComboBoxStyle.DropDownList };
             cboLayout.Items.AddRange(new object[] { "가로 (4열)", "세로 (4줄)" });
             tabGeneral.Controls.Add(cboLayout);
             cboCount.SelectedIndexChanged += delegate { UpdateLayoutNames(); UpdateBgPreview(); };
             cboLayout.SelectedIndexChanged += delegate { UpdateBgPreview(); };
 
-            AddLabel(tabGeneral, "투명도", 12, 128);
+            AddLabel(tabGeneral, "투명도", 12, 137);
             trkOpacity = new TrackBar
             {
-                Location = new Point(144, 120),
+                Location = new Point(144, 129),
                 Size = new Size(200, 45),
                 Minimum = 30,
                 Maximum = 100,
@@ -126,17 +133,17 @@ namespace WinDeck
                 SmallChange = 5,
                 LargeChange = 10
             };
-            lblOpacity = new Label { AutoSize = true, Location = new Point(350, 128) };
+            lblOpacity = new Label { AutoSize = true, Location = new Point(350, 137) };
             trkOpacity.ValueChanged += delegate { lblOpacity.Text = trkOpacity.Value + "%"; };
             tabGeneral.Controls.Add(trkOpacity);
             tabGeneral.Controls.Add(lblOpacity);
 
-            chkTopMost = new CheckBox { Text = "항상 다른 창 위에 표시", AutoSize = true, Location = new Point(12, 170) };
-            chkShowAtCursor = new CheckBox { Text = "단축키로 열 때 마우스 커서 위치에 표시", AutoSize = true, Location = new Point(12, 198) };
+            chkTopMost = new CheckBox { Text = "항상 다른 창 위에 표시", AutoSize = true, Location = new Point(12, 176) };
+            chkShowAtCursor = new CheckBox { Text = "단축키로 열 때 마우스 커서 위치에 표시", AutoSize = true, Location = new Point(12, 202) };
             chkAutoStart = new CheckBox { Text = "윈도우 시작 시 자동 실행", AutoSize = true, Location = new Point(12, 254) };
             tabGeneral.Controls.Add(chkTopMost);
             tabGeneral.Controls.Add(chkShowAtCursor);
-            AddHint(tabGeneral, "끄면 마지막으로 옮겨 둔 자리에 나타납니다.", 30, 222);
+            AddHint(tabGeneral, "끄면 마지막으로 옮겨 둔 자리에 나타납니다.", 30, 225);
             tabGeneral.Controls.Add(chkAutoStart);
             tips.SetToolTip(chkShowAtCursor, "보이기/숨기기·페이지 단축키로 패널을 열 때 마우스가 있는 곳에 띄웁니다.");
             tips.SetToolTip(cboCount, "줄여도 뒤쪽 버튼은 지우지 않고 숨겨서 보관합니다. 다시 늘리면 제자리에 나타납니다.");
@@ -300,6 +307,7 @@ namespace WinDeck
             for (int i = 0; i < KeySizes.Length; i++)
                 if (Math.Abs(KeySizes[i] - working.KeySize) < Math.Abs(KeySizes[sizeIdx] - working.KeySize)) sizeIdx = i;
             cboSize.SelectedIndex = sizeIdx;
+            cboTextSize.SelectedIndex = Math.Max(0, Array.IndexOf(TextSizes.All, TextSizes.IsValid(working.TextSize) ? working.TextSize : TextSizes.Normal));
             cboLayout.SelectedIndex = working.Vertical ? 1 : 0;
             trkOpacity.Value = Math.Max(trkOpacity.Minimum, Math.Min(trkOpacity.Maximum, working.Opacity));
             lblOpacity.Text = trkOpacity.Value + "%";
@@ -802,6 +810,7 @@ namespace WinDeck
         {
             ApplyHotkeyBoxes();
             working.KeySize = KeySizes[Math.Max(0, cboSize.SelectedIndex)];
+            working.TextSize = TextSizes.All[Math.Max(0, cboTextSize.SelectedIndex)];
             working.Vertical = cboLayout.SelectedIndex == 1;
             working.Opacity = trkOpacity.Value;
             working.TopMost = chkTopMost.Checked;
@@ -1085,7 +1094,7 @@ namespace WinDeck
                 {
                     if (!SiteIcon.Wants(b)) continue;
                     list.Add(b);
-                    if (names != null) names.Add(p.Name + " · " + (b.Title.Trim().Length > 0 ? b.Title.Trim() : b.Target));
+                    if (names != null) names.Add(p.Name + " · " + (b.TitleLine.Length > 0 ? b.TitleLine : b.Target));
                 }
             }
             return list;

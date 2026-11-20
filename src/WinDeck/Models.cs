@@ -36,8 +36,42 @@ namespace WinDeck
         }
     }
 
+    /// <summary>버튼 글자 크기 5단계. 설정에 전체 기본값이 있고, 버튼마다 따로 정할 수 있다.</summary>
+    public static class TextSizes
+    {
+        /// <summary>버튼: 따로 정하지 않음 (설정의 기본값을 따른다).</summary>
+        public const string Default = "";
+        public const string Normal = "m";
+
+        public static readonly string[] All = { "xs", "s", "m", "l", "xl" };
+        public static readonly string[] Names = { "아주 작게", "작게", "보통", "크게", "아주 크게" };
+        /// <summary>보통(1.0)에 곱하는 값.</summary>
+        static readonly float[] Scales = { 0.72f, 0.86f, 1f, 1.2f, 1.45f };
+
+        public static bool IsValid(string size)
+        {
+            return Array.IndexOf(All, size) >= 0;
+        }
+
+        public static float Scale(string size)
+        {
+            int i = Array.IndexOf(All, size);
+            return i < 0 ? 1f : Scales[i];
+        }
+
+        public static string Name(string size)
+        {
+            int i = Array.IndexOf(All, size);
+            return i < 0 ? Names[2] : Names[i];
+        }
+    }
+
     public class DeckButton
     {
+        /// <summary>버튼 이름을 직접 나눌 수 있는 줄 수.</summary>
+        public const int MaxTitleLines = 3;
+
+        /// <summary>버튼 이름. 줄을 직접 나눈 곳은 '\n' (최대 MaxTitleLines 줄).</summary>
         public string Title { get; set; }
         public string Description { get; set; }
         public string Action { get; set; }
@@ -51,6 +85,8 @@ namespace WinDeck
         public string ForeColor { get; set; }
         /// <summary>패널을 보지 않고 이 버튼을 실행하는 전역 단축키. 빈 문자열이면 없음.</summary>
         public string Hotkey { get; set; }
+        /// <summary>이 버튼의 글자 크기 (TextSizes). 빈 문자열이면 설정의 기본값을 따른다.</summary>
+        public string TextSize { get; set; }
 
         public DeckButton()
         {
@@ -63,6 +99,32 @@ namespace WinDeck
             BackColor = "";
             ForeColor = "";
             Hotkey = "";
+            TextSize = TextSizes.Default;
+        }
+
+        /// <summary>
+        /// 버튼 이름을 다듬는다: 줄마다 앞뒤 빈칸을 떼고, 빈 줄은 빼고, 줄바꿈은 '\n' 하나로 맞춘다.
+        /// MaxTitleLines 줄을 넘는 부분은 마지막 줄에 이어 붙인다 (글자를 버리지 않는다).
+        /// </summary>
+        public static string CleanTitle(string title)
+        {
+            if (string.IsNullOrEmpty(title)) return "";
+            var lines = new List<string>();
+            foreach (string raw in title.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+            {
+                string t = raw.Trim();
+                if (t.Length == 0) continue;
+                if (lines.Count < MaxTitleLines) lines.Add(t);
+                else lines[MaxTitleLines - 1] += " " + t;
+            }
+            return string.Join("\n", lines.ToArray());
+        }
+
+        /// <summary>한 줄로 쓴 버튼 이름 (안내 문구, 설명 풍선, 목록에 쓴다). 줄을 나눈 곳은 빈칸이 된다.</summary>
+        [ScriptIgnore]
+        public string TitleLine
+        {
+            get { return CleanTitle(Title).Replace('\n', ' '); }
         }
 
         [ScriptIgnore]
@@ -83,7 +145,8 @@ namespace WinDeck
 
         internal void Normalize()
         {
-            if (Title == null) Title = "";
+            Title = CleanTitle(Title);
+            if (!TextSizes.IsValid(TextSize)) TextSize = TextSizes.Default;
             if (Description == null) Description = "";
             if (Target == null) Target = "";
             if (Args == null) Args = "";
@@ -184,6 +247,8 @@ namespace WinDeck
         /// <summary>보이기 단축키로 패널을 열 때 마우스 커서 옆에 표시.</summary>
         public bool ShowAtCursor { get; set; }
         public int KeySize { get; set; }
+        /// <summary>모든 버튼의 기본 글자 크기 (TextSizes). 버튼에 따로 정한 크기가 있으면 그 크기가 먼저다.</summary>
+        public string TextSize { get; set; }
         public bool Vertical { get; set; }
         public int Opacity { get; set; }
         public bool TopMost { get; set; }
@@ -220,6 +285,7 @@ namespace WinDeck
             PrevPageHotkey = DefaultPrevPageHotkey;
             NextPageHotkey = DefaultNextPageHotkey;
             KeySize = 88;
+            TextSize = TextSizes.Normal;
             Opacity = 100;
             TopMost = true;
             ButtonCount = 8;
@@ -296,6 +362,7 @@ namespace WinDeck
             if (NextPageHotkey == null) NextPageHotkey = DefaultNextPageHotkey;
             if (KeySize <= 0) KeySize = 88;
             KeySize = Math.Max(56, Math.Min(160, KeySize));
+            if (!TextSizes.IsValid(TextSize)) TextSize = TextSizes.Normal;
             if (Opacity <= 0) Opacity = 100;
             Opacity = Math.Max(30, Math.Min(100, Opacity));
             ButtonCount = ButtonCounts.OrderBy(n => Math.Abs(n - ButtonCount)).First();

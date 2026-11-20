@@ -41,6 +41,8 @@ namespace WinDeck
 
         /// <summary>버튼 이름 최대 글자 수 (편집 창, 끌어 놓을 때 묻는 창이 같이 쓴다).</summary>
         public const int TitleMaxLength = 40;
+        /// <summary>이름 칸을 3줄로 넓힌 만큼의 높이 (96 DPI 기준). 이름 칸 아래의 컨트롤을 이만큼 내린다.</summary>
+        const int TitleExtraHeight = 32;
 
         readonly AppConfig cfg;
         readonly DeckButton original;
@@ -50,7 +52,7 @@ namespace WinDeck
         TextBox txtTitle, txtDesc, txtFolder, txtUrl, txtText, txtRun, txtArgs;
         KeyCaptureBox txtHotkey, txtKeyHotkey;
         Button btnRecord, btnKeyRecord, btnLibrary, btnTest, btnOk, btnCancel, btnIcon, btnIconClear, btnBackCustom, btnFore, btnForeAuto;
-        ComboBox cboAction, cboPreset, cboPage;
+        ComboBox cboAction, cboPreset, cboPage, cboTextSize;
         CheckBox chkEnter, chkPaste;
         readonly Dictionary<string, Panel> panels = new Dictionary<string, Panel>();
         readonly List<Button> swatchButtons = new List<Button>();
@@ -93,11 +95,21 @@ namespace WinDeck
             ShowInTaskbar = false;
             ShowIcon = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(624, 596);
+            ClientSize = new Size(624, 596 + TitleExtraHeight);
             tips = new ToolTip();
 
+            // 이름 칸은 3줄. Enter 를 누르면 그 자리에서 줄이 바뀌고, 버튼에도 그 자리에서 줄이 바뀐다.
             AddLabel(this, "버튼 이름", 16, 19);
-            txtTitle = new TextBox { Location = new Point(120, 16), Size = new Size(330, 23), MaxLength = TitleMaxLength };
+            Controls.Add(new Label { Text = "Enter: 줄바꿈\n(최대 " + DeckButton.MaxTitleLines + "줄)", AutoSize = true, Location = new Point(16, 38), ForeColor = SystemColors.GrayText });
+            txtTitle = new TextBox
+            {
+                Location = new Point(120, 16),
+                Size = new Size(330, 23 + TitleExtraHeight),
+                Multiline = true,
+                AcceptsReturn = true,
+                WordWrap = false, // 칸이 좁아서 저절로 넘어간 줄과 직접 나눈 줄이 섞여 보이지 않게
+                MaxLength = TitleMaxLength + 2 * (DeckButton.MaxTitleLines - 1) // 줄바꿈(두 글자) 자리를 더한다
+            };
             Controls.Add(txtTitle);
 
             AddLabel(this, "설명 (툴팁)", 16, 51);
@@ -215,8 +227,27 @@ namespace WinDeck
             tips.SetToolTip(txtKeyHotkey, "예: Ctrl+Alt+1 — 어느 프로그램에서든 이 키를 누르면 버튼이 실행됩니다.");
             Controls.Add(preview);
 
+            // 글자 크기 (모양 구역의 오른쪽): 기본값은 설정의 '버튼 글자 크기'를 따른다.
+            Controls.Add(new Label { Text = "글자 크기", AutoSize = true, Location = new Point(474, 360) });
+            cboTextSize = new ComboBox { Location = new Point(474, 381), Size = new Size(136, 23), DropDownStyle = ComboBoxStyle.DropDownList };
+            cboTextSize.Items.Add("기본값 (" + TextSizes.Name(cfg.TextSize) + ")");
+            cboTextSize.Items.AddRange(TextSizes.Names);
+            Controls.Add(cboTextSize);
+            tips.SetToolTip(cboTextSize, "이 버튼의 글자 크기. '기본값'은 설정 → 일반 → 버튼 글자 크기를 따릅니다.\n글자가 크면 아이콘이 조금 작아집니다.");
+
+            // 이름 칸이 3줄로 커진 만큼, 그 아래 왼쪽 컨트롤과 '모양' 구역 전체(오른쪽 포함)를 아래로 내린다.
+            // 오른쪽 위의 미리보기와 바로 실행 단축키는 제자리에 둔다.
+            foreach (Control c in Controls)
+                if (c.Top >= 340 || (c.Left < 460 && c.Top >= 44 && c != txtTitle)) c.Top += TitleExtraHeight;
+
             // events
             txtTitle.TextChanged += delegate { UpdatePreview(); };
+            txtTitle.KeyDown += (sender, e) =>
+            {
+                // 정한 줄 수를 다 썼으면 Enter 로 줄을 더 만들지 않는다 (넘치는 줄은 저장할 때 마지막 줄에 붙는다).
+                if (e.KeyCode == Keys.Enter && txtTitle.Lines.Length >= DeckButton.MaxTitleLines) e.SuppressKeyPress = true;
+            };
+            cboTextSize.SelectedIndexChanged += delegate { UpdatePreview(); };
             cboAction.SelectedIndexChanged += delegate { ShowActionPanel(); UpdatePreview(); };
             txtRun.TextChanged += delegate { UpdatePreview(); };
             btnIcon.Click += delegate { PickIcon(); };
@@ -234,7 +265,7 @@ namespace WinDeck
             var order = new List<Control> { txtTitle, txtDesc, cboAction };
             foreach (string a in ActionTypes.All)
                 if (panels.ContainsKey(a)) order.Add(panels[a]);
-            order.AddRange(new Control[] { btnLibrary, btnIcon, btnIconClear, btnBackCustom, txtBackHex, btnFore, btnForeAuto, txtForeHex,
+            order.AddRange(new Control[] { btnLibrary, btnIcon, btnIconClear, cboTextSize, btnBackCustom, txtBackHex, btnFore, btnForeAuto, txtForeHex,
                 txtKeyHotkey, btnKeyRecord, btnTest, btnOk, btnCancel });
             for (int i = 0; i < order.Count; i++) order[i].TabIndex = i;
 
@@ -246,7 +277,8 @@ namespace WinDeck
         }
 
         /// <summary>
-        /// 한 줄 입력란에서 Enter = [확인]. 여러 줄 입력란(설명, 입력할 문장), 색 코드 칸(Enter = 색 적용),
+        /// 한 줄 입력란(경로, 주소, 실행 옵션)에서 Enter = [확인].
+        /// 이름 칸(Enter = 줄바꿈), 여러 줄 입력란(설명, 입력할 문장), 색 코드 칸(Enter = 색 적용),
         /// 단축키를 받는 칸은 그대로 둔다.
         /// </summary>
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -254,7 +286,7 @@ namespace WinDeck
             if (keyData == Keys.Enter)
             {
                 Control a = ActiveControl;
-                if (a != null && (a == txtTitle || a == txtFolder || a == txtUrl || a == txtRun || a == txtArgs))
+                if (a != null && (a == txtFolder || a == txtUrl || a == txtRun || a == txtArgs))
                 {
                     Accept();
                     return true;
@@ -397,7 +429,8 @@ namespace WinDeck
 
         void LoadValues()
         {
-            txtTitle.Text = original.Title;
+            txtTitle.Text = DeckButton.CleanTitle(original.Title).Replace("\n", "\r\n");
+            cboTextSize.SelectedIndex = Array.IndexOf(TextSizes.All, original.TextSize) + 1; // 0 = 기본값
             txtDesc.Text = original.Description;
             txtKeyHotkey.Text = original.Hotkey ?? "";
             int idx = Array.IndexOf(ActionTypes.All, original.Action);
@@ -435,7 +468,8 @@ namespace WinDeck
         {
             var b = new DeckButton
             {
-                Title = txtTitle.Text.Trim(),
+                Title = DeckButton.CleanTitle(txtTitle.Text),
+                TextSize = cboTextSize == null || cboTextSize.SelectedIndex <= 0 ? TextSizes.Default : TextSizes.All[cboTextSize.SelectedIndex - 1],
                 Description = txtDesc.Text.Trim(),
                 Action = SelectedAction,
                 IconData = iconData ?? "",

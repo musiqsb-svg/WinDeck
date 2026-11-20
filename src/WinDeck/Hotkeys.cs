@@ -67,7 +67,7 @@ namespace WinDeck
                 {
                     DeckButton button = page.Buttons[b];
                     if (button == null || button.IsEmpty) continue;
-                    string title = string.IsNullOrWhiteSpace(button.Title) ? (b + 1) + "번" : "'" + button.Title + "'";
+                    string title = string.IsNullOrWhiteSpace(button.Title) ? (b + 1) + "번" : "'" + button.TitleLine + "'";
                     Add(list, HotkeyKind.Button, button.Hotkey, p, b, "'" + page.Name + "' 페이지의 " + title + " 버튼");
                     if (b >= cfg.ButtonCount && list.Count > 0 && list[list.Count - 1].ButtonIndex == b && list[list.Count - 1].PageIndex == p)
                         list[list.Count - 1].Hidden = true;

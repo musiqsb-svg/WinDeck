@@ -268,7 +268,7 @@ namespace WinDeck
                     if (b.IsEmpty) continue;
                     info.Buttons++;
                     if (!string.IsNullOrWhiteSpace(b.Hotkey)) info.Hotkeys++;
-                    names.Add(string.IsNullOrWhiteSpace(b.Title) ? (i + 1) + "번" : b.Title);
+                    names.Add(string.IsNullOrWhiteSpace(b.Title) ? (i + 1) + "번" : b.TitleLine);
                 }
                 if (names.Count > 0) info.Lines.Add("'" + page.Name + "' : " + string.Join(", ", names.ToArray()));
             }

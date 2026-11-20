@@ -572,7 +572,7 @@ static partial class SmokeTest
         using (var f = new ButtonEditForm(cfg.Pages[0].Buttons[0].Clone(), cfg, 0, 0))
         {
             Func<string, Control> field = name => (Control)typeof(ButtonEditForm).GetField(name, NonPublic).GetValue(f);
-            string[] order = { "txtTitle", "txtDesc", "cboAction", "btnLibrary", "btnIcon", "btnIconClear", "btnBackCustom", "txtBackHex", "btnFore", "btnForeAuto", "txtForeHex", "txtKeyHotkey", "btnKeyRecord", "btnTest", "btnOk", "btnCancel" };
+            string[] order = { "txtTitle", "txtDesc", "cboAction", "btnLibrary", "btnIcon", "btnIconClear", "cboTextSize", "btnBackCustom", "txtBackHex", "btnFore", "btnForeAuto", "txtForeHex", "txtKeyHotkey", "btnKeyRecord", "btnTest", "btnOk", "btnCancel" };
             int[] idx = order.Select(n => field(n).TabIndex).ToArray();
             Check(idx.Zip(idx.Skip(1), (a, b) => a < b).All(x => x), "edit window: Tab moves in the order the controls are shown", string.Join(",", idx.Select(i => i.ToString()).ToArray()));
 
@@ -589,11 +589,15 @@ static partial class SmokeTest
             f.ActiveControl = field("txtDesc");
             bool inDesc = (bool)cmd.Invoke(f, new object[] { msg, Keys.Enter });
             Check(!inDesc && f.Visible && f.DialogResult == DialogResult.None, "edit window: Enter in the description box does not close the window");
+            // 1.7.0: 이름 칸의 Enter 는 줄바꿈이다 (확인이 아니다). 경로·주소 칸의 Enter 는 확인.
             ((TextBox)field("txtTitle")).Text = "Enter 로 저장";
             f.ActiveControl = field("txtTitle");
             bool inTitle = (bool)cmd.Invoke(f, new object[] { msg, Keys.Enter });
+            Check(!inTitle && f.Visible && f.DialogResult == DialogResult.None, "edit window: Enter in the name box does not close the window (it breaks the line)");
+            f.ActiveControl = field("txtFolder");
+            bool inFolder = (bool)cmd.Invoke(f, new object[] { msg, Keys.Enter });
             Pump(50);
-            Check(inTitle && f.DialogResult == DialogResult.OK && f.Result != null && f.Result.Title == "Enter 로 저장", "edit window: Enter in the name box confirms like [확인]",
+            Check(inFolder && f.DialogResult == DialogResult.OK && f.Result != null && f.Result.Title == "Enter 로 저장", "edit window: Enter in the folder box confirms like [확인]",
                 f.DialogResult + " " + (f.Result == null ? "null" : f.Result.Title));
         }
         using (var f = new ButtonEditForm(cfg.Pages[0].Buttons[0].Clone(), cfg, 0, 0))

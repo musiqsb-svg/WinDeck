@@ -362,6 +362,7 @@ namespace WinDeck
             if (Math.Abs(Opacity - cfg.Opacity / 100.0) > 0.001) Opacity = cfg.Opacity / 100.0;
             if (TopMost != cfg.TopMost) TopMost = cfg.TopMost;
             IconCache.ForgetShellIcons(); // 설정이 바뀌었다: 못 찾았던 프로그램 아이콘을 다시 찾아본다
+            KeyRenderer.DefaultTextSize = cfg.TextSize; // 글자 크기를 따로 정하지 않은 버튼이 쓰는 크기
             DoLayoutPanel();
             if (first)
             {
@@ -1136,7 +1137,7 @@ namespace WinDeck
         {
             DeckPage page = PageById(pageId);
             if (page == null || page.Buttons[index] == null || page.Buttons[index].IsEmpty) return false;
-            string title = page.Buttons[index].Title;
+            string title = page.Buttons[index].TitleLine;
             string name = string.IsNullOrWhiteSpace(title) ? "이" : "'" + title + "'";
             if (Ask(name + " 버튼을 비울까요?", MessageBoxButtons.YesNo) != DialogResult.Yes) return false;
             SyncFromDisk();
@@ -1150,7 +1151,7 @@ namespace WinDeck
         bool ConfirmReplace(DeckButton existing, string what)
         {
             if (existing == null || existing.IsEmpty) return true;
-            string name = string.IsNullOrWhiteSpace(existing.Title) ? "기존" : "'" + existing.Title + "'";
+            string name = string.IsNullOrWhiteSpace(existing.Title) ? "기존" : "'" + existing.TitleLine + "'";
             return Ask(name + " 버튼을 " + what + "(으)로 바꿀까요?", MessageBoxButtons.YesNo) == DialogResult.Yes;
         }
 
@@ -1425,7 +1426,7 @@ namespace WinDeck
                         Body = "클릭해서 설정하거나, 파일·폴더·링크를 이 칸에 끌어다 놓으세요.",
                         Detail = "우클릭: 메뉴"
                     };
-                string title = string.IsNullOrWhiteSpace(b.Title) ? ActionTypes.DisplayName(b.Action) : b.Title;
+                string title = string.IsNullOrWhiteSpace(b.Title) ? ActionTypes.DisplayName(b.Action) : b.TitleLine;
                 string detail = ActionDetail(b);
                 if (!string.IsNullOrWhiteSpace(b.Hotkey)) detail += "\n바로 실행 단축키 · " + b.Hotkey;
                 return new TipContent { Title = title, Body = b.Description, Detail = detail };

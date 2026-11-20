@@ -52,56 +52,159 @@ namespace WinDeck
                 DrawFlash(g, path, flash, size);
             }
 
-            string title = (b.Title ?? "").Trim();
-            bool hasTitle = title.Length > 0;
             Image icon = IconCache.ForButton(b);
             string glyph = icon == null ? Glyphs.ForAction(b.Action) : null;
+            KeyLayout lay = Layout(g, r, b, icon != null || glyph != null);
 
-            if (icon == null && glyph == null)
+            if (!lay.IconRect.IsEmpty)
             {
-                if (!hasTitle) return;
-                Rectangle tr = Rectangle.Round(RectangleF.Inflate(r, -size * 0.08f, -size * 0.08f));
-                Font f = Theme.PixelFont(Theme.UiFontName, Math.Max(12f, size * 0.16f), FontStyle.Bold);
-                DrawTitle(g, title, f, tr, fg, 3, true);
-                return;
+                if (icon != null) DrawImageFit(g, icon, lay.IconRect);
+                else DrawGlyph(g, glyph, lay.IconRect, fg);
             }
-
-            float iconSize = size * (hasTitle ? 0.40f : 0.52f);
-            float iconTop = hasTitle ? r.Top + size * 0.14f : r.Top + (r.Height - iconSize) / 2f;
-            Rectangle ir = Rectangle.Round(new RectangleF(r.Left + (r.Width - iconSize) / 2f, iconTop, iconSize, iconSize));
-            if (icon != null) DrawImageFit(g, icon, ir);
-            else DrawGlyph(g, glyph, ir, fg);
-
-            if (hasTitle)
+            int y = lay.TextRect.Y;
+            foreach (string line in lay.Lines)
             {
-                float fontPx = Math.Max(11f, size * 0.135f);
-                var tr = Rectangle.Round(new RectangleF(
-                    r.Left + size * 0.05f, ir.Bottom + size * 0.05f,
-                    r.Width - size * 0.10f, r.Bottom - ir.Bottom - size * 0.07f));
-                DrawTitle(g, title, Theme.PixelFont(Theme.UiFontName, fontPx, FontStyle.Bold), tr, fg, 2, false);
+                TextRenderer.DrawText(g, line, lay.Font, new Rectangle(lay.TextRect.X, y, lay.TextRect.Width, lay.LineHeight), fg,
+                    LineFlags | TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
+                y += lay.LineHeight;
             }
         }
 
-        const TextFormatFlags LineFlags = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+        /// <summary>
+        /// 설정의 '버튼 글자 크기' (TextSizes): 버튼에 따로 정한 크기가 없을 때 쓴다.
+        /// 패널이 설정을 적용할 때 넣는다 (DeckForm.ApplyConfig).
+        /// </summary>
+        public static string DefaultTextSize = TextSizes.Normal;
+
+        /// <summary>버튼 안의 아이콘 자리와 이름 줄들 (그리기와 점검이 함께 쓴다).</summary>
+        public class KeyLayout
+        {
+            /// <summary>아이콘 자리. 아이콘이 없으면 비어 있다.</summary>
+            public Rectangle IconRect;
+            /// <summary>이름 첫 줄의 위치와 폭. 높이는 줄 수 × LineHeight.</summary>
+            public Rectangle TextRect;
+            public List<string> Lines = new List<string>();
+            public Font Font;
+            public int LineHeight;
+            /// <summary>글자 크기 (픽셀).</summary>
+            public float FontPx;
+        }
+
+        /// <summary>이 버튼에 쓰는 글자 크기 배율: 버튼에 정한 크기, 없으면 설정의 기본값.</summary>
+        public static float TextScale(DeckButton b)
+        {
+            return TextSizes.Scale(b != null && TextSizes.IsValid(b.TextSize) ? b.TextSize : DefaultTextSize);
+        }
 
         /// <summary>
-        /// 가운데 정렬 제목. GDI 기본 줄바꿈은 한글 단어 중간("보/기")에서 끊기 때문에
-        /// 띄어쓰기 기준으로 직접 줄을 나누고, 한 단어가 너무 길 때만 글자 단위로 자른다.
+        /// 버튼 칸 r 안에서 아이콘과 이름을 어디에 그릴지 정한다.
+        ///   - 이름은 직접 나눈 줄('\n')을 지키고, 긴 줄은 띄어쓰기에서 자동으로 나눈다.
+        ///   - 글자가 '보통' 크기이고 두 줄 안에 들어가면 예전과 같은 자리(아이콘 40%)에 그린다.
+        ///   - 글자가 크거나 줄이 많아 자리가 모자라면 아이콘을 줄여 자리를 만든다 (아이콘은 버튼의 20%까지).
+        ///     그래도 모자라면 줄 수를 줄이고 마지막 줄 끝을 "…" 로 표시한다.
         /// </summary>
-        static void DrawTitle(Graphics g, string text, Font font, Rectangle rect, Color color, int maxLines, bool verticalCenter)
+        public static KeyLayout Layout(Graphics g, RectangleF r, DeckButton b, bool hasIcon)
         {
-            if (rect.Width <= 0 || rect.Height <= 0) return;
-            int lineHeight = TextRenderer.MeasureText(g, "가Ag", font, Size.Empty, LineFlags).Height;
-            maxLines = Math.Max(1, Math.Min(maxLines, rect.Height / Math.Max(1, lineHeight)));
-            List<string> lines = WrapLines(g, text, font, rect.Width, maxLines);
-            int total = lines.Count * lineHeight;
-            int y = verticalCenter ? rect.Y + (rect.Height - total) / 2 : rect.Y;
-            foreach (string line in lines)
+            var lay = new KeyLayout();
+            float size = Math.Min(r.Width, r.Height);
+            string title = DeckButton.CleanTitle(b == null ? null : b.Title);
+            bool hasTitle = title.Length > 0;
+            int manualLines = hasTitle ? title.Split('\n').Length : 0;
+            float scale = TextScale(b);
+
+            if (!hasIcon)
             {
-                TextRenderer.DrawText(g, line, font, new Rectangle(rect.X, y, rect.Width, lineHeight), color,
-                    LineFlags | TextFormatFlags.HorizontalCenter | TextFormatFlags.Top);
-                y += lineHeight;
+                // 글자만 있는 버튼: 한가운데에 그린다.
+                if (!hasTitle) return lay;
+                Rectangle area = Rectangle.Round(RectangleF.Inflate(r, -size * 0.08f, -size * 0.08f));
+                lay.FontPx = Math.Max(MinFontPx, Math.Max(12f, size * 0.16f) * scale);
+                lay.Font = Theme.PixelFont(Theme.UiFontName, lay.FontPx, FontStyle.Bold);
+                lay.LineHeight = LineHeightOf(g, lay.Font);
+                if (area.Width <= 0 || area.Height <= 0) return lay;
+                int most = Math.Max(1, Math.Min(Math.Max(3, manualLines), area.Height / Math.Max(1, lay.LineHeight)));
+                lay.Lines = WrapTitle(g, title, lay.Font, area.Width, most);
+                int total = lay.Lines.Count * lay.LineHeight;
+                lay.TextRect = new Rectangle(area.X, area.Y + (area.Height - total) / 2, area.Width, total);
+                return lay;
             }
+
+            if (!hasTitle)
+            {
+                float alone = size * 0.52f;
+                lay.IconRect = Rectangle.Round(new RectangleF(r.Left + (r.Width - alone) / 2f, r.Top + (r.Height - alone) / 2f, alone, alone));
+                return lay;
+            }
+
+            lay.FontPx = Math.Max(MinFontPx, Math.Max(11f, size * 0.135f) * scale);
+            lay.Font = Theme.PixelFont(Theme.UiFontName, lay.FontPx, FontStyle.Bold);
+            lay.LineHeight = LineHeightOf(g, lay.Font);
+            int textLeft = (int)Math.Round(r.Left + size * 0.05f);
+            int textWidth = (int)Math.Round(r.Width - size * 0.10f);
+            if (textWidth <= 0) return lay;
+
+            // 아이콘을 가장 작게(20%) 했을 때 들어가는 줄 수까지만 쓴다. 직접 나눈 줄이 없으면 두 줄까지.
+            const float tightTop = 0.10f, tightGap = 0.04f, tightBottom = 0.03f, smallestIcon = 0.20f;
+            int fits = Math.Max(1, (int)((r.Height - size * (tightTop + smallestIcon + tightGap + tightBottom)) / lay.LineHeight));
+            int wanted = Math.Min(DeckButton.MaxTitleLines, Math.Max(2, manualLines));
+            lay.Lines = WrapTitle(g, title, lay.Font, textWidth, Math.Min(wanted, fits));
+            float textHeight = lay.Lines.Count * lay.LineHeight;
+
+            // 보통 배치 (1.6 까지와 같은 자리): 위 14%, 아이콘 40%, 간격 5%. 이름이 그 아래 자리에 들어가면 그대로 쓴다.
+            float iconSize = size * 0.40f, iconTop = r.Top + size * 0.14f, gap = size * 0.05f;
+            Rectangle ir = Rectangle.Round(new RectangleF(r.Left + (r.Width - iconSize) / 2f, iconTop, iconSize, iconSize));
+            int room = (int)Math.Round(r.Bottom - ir.Bottom - size * 0.07f);
+            if (textHeight > room)
+            {
+                // 자리가 모자라다: 여백을 줄이고 아이콘을 줄여 이름 자리를 만든다.
+                gap = size * tightGap;
+                iconTop = r.Top + size * tightTop;
+                iconSize = Math.Max(size * smallestIcon, r.Height - size * (tightTop + tightGap + tightBottom) - textHeight);
+                ir = Rectangle.Round(new RectangleF(r.Left + (r.Width - iconSize) / 2f, iconTop, iconSize, iconSize));
+            }
+            lay.IconRect = ir;
+            lay.TextRect = new Rectangle(textLeft, (int)Math.Round(ir.Bottom + gap), textWidth, (int)textHeight);
+            return lay;
+        }
+
+        /// <summary>버튼 글자의 가장 작은 크기 (픽셀). 이보다 작으면 읽기 어렵다.</summary>
+        const float MinFontPx = 9f;
+
+        const TextFormatFlags LineFlags = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+
+        static int LineHeightOf(Graphics g, Font font)
+        {
+            return Math.Max(1, TextRenderer.MeasureText(g, "가Ag", font, Size.Empty, LineFlags).Height);
+        }
+
+        /// <summary>
+        /// 이름을 줄로 나눈다 (최대 maxLines 줄). 직접 나눈 줄('\n')은 그대로 지키고, 폭을 넘는 줄은 WrapLines 로 더 나눈다.
+        /// 줄이 모자라 다 넣지 못하면 마지막 줄 끝을 "…" 로 표시한다.
+        /// </summary>
+        public static List<string> WrapTitle(Graphics g, string title, Font font, int width, int maxLines)
+        {
+            var lines = new List<string>();
+            maxLines = Math.Max(1, maxLines);
+            string[] parts = title.Split('\n');
+            for (int p = 0; p < parts.Length; p++)
+            {
+                string part = parts[p].Trim();
+                if (part.Length == 0) continue;
+                if (lines.Count >= maxLines)
+                {
+                    // 줄이 남지 않았다: 남은 글을 마지막 줄에 이어 붙이고, 넘치는 부분은 "…" 로 표시한다.
+                    // (마지막 줄이 이미 "…" 로 끝나면 그대로 둔다.)
+                    string last = lines[lines.Count - 1];
+                    if (!last.EndsWith("…"))
+                    {
+                        string rest = last + " " + part;
+                        for (int q = p + 1; q < parts.Length; q++) rest += " " + parts[q].Trim();
+                        lines[lines.Count - 1] = Ellipsize(g, rest.Trim(), font, width);
+                    }
+                    break;
+                }
+                lines.AddRange(WrapLines(g, part, font, width, maxLines - lines.Count));
+            }
+            return lines;
         }
 
         static int Measure(Graphics g, string s, Font font)

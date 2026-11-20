@@ -126,6 +126,7 @@ static partial class SmokeTest
         Safe("v15", TestV15);
         Safe("v16", TestV16);
         Safe("v17", TestV17);
+        Safe("v18", TestV18);
         if (packageDir != null) Safe("setup", () => TestSetup(packageDir));
         if (args.Contains("--actions")) Safe("real actions", TestRealActions);
         if (args.Contains("--input")) Safe("input", TestInput);
