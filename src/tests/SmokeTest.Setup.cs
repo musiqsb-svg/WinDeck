@@ -364,7 +364,7 @@ static partial class SmokeTest
     }
 
     /// <summary>
-    /// 1.6.1: 설치·제거가 도중에 막혀도 쓰던 것을 망가뜨리지 않는지, 설치가 만든 것만 지우는지.
+    /// 1.7.0: 설치·제거가 도중에 막혀도 쓰던 것을 망가뜨리지 않는지, 설치가 만든 것만 지우는지.
     /// TestSetup 의 격리된 폴더·시험용 레지스트리 키 안에서 부른다. 시작과 끝은 '설치 안 됨' 상태.
     /// </summary>
     static void TestSetupSafety(string root, string pkg, string installer, string pkgUninstaller, string version)

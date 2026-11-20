@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 using WinDeck;
 
-// 1.6.1: 전체 검토에서 찾은 문제들 (휠 두 번 넘김, 끌기 취소, 작업 폴더, 업데이트 주소 검사, 사진 회전, 사이트 아이콘 등).
+// 1.7.0: 전체 검토에서 찾은 문제들 (휠 두 번 넘김, 끌기 취소, 작업 폴더, 업데이트 주소 검사, 사진 회전, 사이트 아이콘 등).
 static partial class SmokeTest
 {
     const BindingFlags NonPublic = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -164,11 +164,11 @@ static partial class SmokeTest
         string local = new Uri(Path.Combine(outDir, "some-file.txt")).AbsoluteUri;
         Check(!Updater.IsAllowedUrl(local), "a file:// update address is refused in normal use");
 
-        Check(Updater.IsSafeFileName("WinDeck-Setup-1.6.1.exe") && Updater.IsSafeFileName("WinDeck-SHA256-1.6.1.txt"), "ordinary release file names are accepted");
+        Check(Updater.IsSafeFileName("WinDeck-Setup-1.7.0.exe") && Updater.IsSafeFileName("WinDeck-SHA256-1.7.0.txt"), "ordinary release file names are accepted");
         Check(!Updater.IsSafeFileName("..\\..\\evil.exe") && !Updater.IsSafeFileName("a/b.exe") && !Updater.IsSafeFileName("C:\\x.exe") && !Updater.IsSafeFileName("..")
             && !Updater.IsSafeFileName("") && !Updater.IsSafeFileName(null) && !Updater.IsSafeFileName("a:b.exe"), "file names that leave the download folder are refused");
 
-        string tagPage = "https://github.com/" + Updater.Repo + "/releases/tag/v1.6.1";
+        string tagPage = "https://github.com/" + Updater.Repo + "/releases/tag/v1.7.0";
         Check(Updater.PageToOpen(tagPage) == tagPage && Updater.PageToOpen(null) == Updater.ReleasesPage
             && Updater.PageToOpen("https://example.com/x") == Updater.ReleasesPage && Updater.PageToOpen("C:\\Windows\\System32\\calc.exe") == Updater.ReleasesPage
             && Updater.PageToOpen("https://github.com/someone-else/WinDeck/releases") == Updater.ReleasesPage,
@@ -589,7 +589,7 @@ static partial class SmokeTest
             f.ActiveControl = field("txtDesc");
             bool inDesc = (bool)cmd.Invoke(f, new object[] { msg, Keys.Enter });
             Check(!inDesc && f.Visible && f.DialogResult == DialogResult.None, "edit window: Enter in the description box does not close the window");
-            // 1.7.0: 이름 칸의 Enter 는 줄바꿈이다 (확인이 아니다). 경로·주소 칸의 Enter 는 확인.
+            // 이름 칸의 Enter 는 줄바꿈이다 (확인이 아니다). 경로·주소 칸의 Enter 는 확인.
             ((TextBox)field("txtTitle")).Text = "Enter 로 저장";
             f.ActiveControl = field("txtTitle");
             bool inTitle = (bool)cmd.Invoke(f, new object[] { msg, Keys.Enter });

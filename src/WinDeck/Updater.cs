@@ -241,7 +241,7 @@ namespace WinDeck
             return pageUrl != null && pageUrl.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? pageUrl : ReleasesPage;
         }
 
-        /// <summary>릴리스 정보에 적힌 파일 이름이 폴더를 벗어나지 않는 평범한 이름인지 (예: WinDeck-Setup-1.6.1.exe).</summary>
+        /// <summary>릴리스 정보에 적힌 파일 이름이 폴더를 벗어나지 않는 평범한 이름인지 (예: WinDeck-Setup-1.7.0.exe).</summary>
         public static bool IsSafeFileName(string name)
         {
             if (string.IsNullOrWhiteSpace(name) || name.Length > 120) return false;

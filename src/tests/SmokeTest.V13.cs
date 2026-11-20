@@ -385,7 +385,7 @@ static partial class SmokeTest
             ChecksumUrl = new Uri(sumsFile).AbsoluteUri
         };
         var steps = new List<string>();
-        // 1.6.1: 보통 실행에서는 https 주소만 받는다. file:// 은 점검용 주소를 줄 때(WINDECK_INSTANCE + WINDECK_UPDATE_URL)만 받는다.
+        // 1.7.0: 보통 실행에서는 https 주소만 받는다. file:// 은 점검용 주소를 줄 때(WINDECK_INSTANCE + WINDECK_UPDATE_URL)만 받는다.
         threw = false;
         try { Updater.Prepare(local, (s, n) => { }, null); }
         catch (UpdateException ex) { threw = ex.Message.Contains("https"); }

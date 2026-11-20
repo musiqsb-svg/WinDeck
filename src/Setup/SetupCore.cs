@@ -505,7 +505,7 @@ namespace WinDeck.Setup
 
         /// <summary>
         /// 자동 업데이트가 실패했을 때: 쓰던 WinDeck 을 다시 켠다 (그대로 두면 WinDeck 이 말없이 꺼진 채로 남는다).
-        /// --update-failed 를 받은 WinDeck(1.6.1 이상)은 업데이트 실패를 트레이 알림으로 알린다. 그 전 버전은 이 인자를 무시한다.
+        /// --update-failed 를 받은 WinDeck(1.7.0 이상)은 업데이트 실패를 트레이 알림으로 알린다. 그 전 버전은 이 인자를 무시한다.
         /// 켰으면 true.
         /// </summary>
         public static bool RelaunchAfterFailure()
