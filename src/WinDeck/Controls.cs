@@ -180,7 +180,8 @@ namespace WinDeck
         {
             // 옮기는 중인 버튼은 자리만 남은 빈칸처럼 그린다 (버튼 모양은 마우스를 따라다니는 창에 보인다).
             DeckButton shown = moveSource ? null : Data;
-            bool hot = hover && !moveSource;
+            // 끄는 동안 마우스는 이 칸이 잡고 있으므로 마우스가 다른 곳에 있어도 hover 가 남는다: 강조하지 않는다.
+            bool hot = hover && !moveSource && !moving;
             var host = Parent as IBackgroundHost;
             if (host != null)
             {

@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -46,9 +47,13 @@ namespace WinDeck
         ToolStripMenuItem miEdit, miRun, miCopy, miPaste, miClear, miMove;
         DeckButton copiedButton;
         DragGhost moveGhost;
-        DeckKey moveTarget;
+        DeckKey moveTarget, moveKey;
         string movePageId;
-        Rectangle titleRect;
+        // 끄는 중 페이지 넘기기: 머무는 가장자리(-1 왼쪽, 1 오른쪽, 0 없음), 머물기 시작한 때, 넘기기까지 기다릴 시간
+        readonly Timer edgeTimer;
+        int edgeSide, edgeWaitMs;
+        DateTime edgeSince;
+        Rectangle titleRect, gridRect;
         bool dragging;
         Point dragCursor, dragOrigin;
         int wheelAccum;
@@ -144,6 +149,11 @@ namespace WinDeck
                 siteIconTimer.Stop();
                 ApplyPendingSiteIcons();
             };
+
+            // 버튼을 끄는 중 패널 옆 가장자리나 ◀ ▶ 위에 머물면 페이지를 넘긴다.
+            // 마우스가 멈춰 있으면 움직임 알림이 오지 않으므로 시계로 마우스 위치를 본다.
+            edgeTimer = new Timer { Interval = 40 };
+            edgeTimer.Tick += delegate { EdgeTick(Cursor.Position); };
 
             // 하루 백업, 하루 한 번 업데이트 확인 (시작 1분 뒤, 그 뒤로 한 시간마다 점검)
             maintenanceTimer = new Timer { Interval = 60 * 1000 };
@@ -280,6 +290,7 @@ namespace WinDeck
                 modifierTimer.Dispose();
                 reloadTimer.Dispose();
                 maintenanceTimer.Dispose();
+                edgeTimer.Dispose();
                 if (watcher != null) watcher.Dispose();
                 if (bgCache != null) bgCache.Dispose();
                 if (tray != null) tray.Dispose();
@@ -323,6 +334,7 @@ namespace WinDeck
                 keys[i].Visible = i < cfg.ButtonCount; // 줄인 뒤쪽 칸은 숨기기만 하고 데이터는 보관
                 keys[i].Bounds = new Rectangle(pad + c * (k + gap), gridTop + r * (k + gap), k, k);
             }
+            gridRect = new Rectangle(pad, gridTop, cols * k + (cols - 1) * gap, rows * k + (rows - 1) * gap);
 
             int bw = S(26);
             btnPrev.Bounds = new Rectangle(pad - S(3), barTop, bw, barH);
@@ -396,6 +408,12 @@ namespace WinDeck
                 tip.SetToolTip(keys[i], "·");
                 keys[i].Invalidate();
             }
+            if (moveKey != null)
+            {
+                // 끄는 중 페이지가 바뀌었다: 옮기는 버튼의 빈자리는 원래 페이지에서만 보인다.
+                moveKey.MoveSource = CurrentPage.Id == movePageId;
+                UpdateMoveTarget(Cursor.Position);
+            }
             bool multi = cfg.Pages.Count > 1;
             btnPrev.Enabled = multi;
             btnNext.Enabled = multi;
@@ -410,6 +428,7 @@ namespace WinDeck
             if (!dwmBorder)
                 using (var pen = new Pen(Theme.PanelBorder))
                     g.DrawRectangle(pen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+            DrawEdgeHint(g);
 
             if (titleRect.Width <= 0) return;
             string name = CurrentPage.Name;
@@ -734,25 +753,39 @@ namespace WinDeck
             if (CurrentPage == from) keys[index].Flash(Theme.Accent);
         }
 
-        // ------------------------------------------------------------------ moving a key inside the page (mouse drag)
+        // ------------------------------------------------------------------ moving a key (mouse drag), also to other pages
+
+        /// <summary>끄는 중 가장자리에 이만큼 머물면 페이지를 넘긴다 (ms). 계속 머물면 EdgeRepeatMs 마다 또 넘긴다.</summary>
+        const int EdgeFirstMs = 600, EdgeRepeatMs = 1000;
+        /// <summary>페이지를 넘기는 가장자리가 패널 밖으로 이어지는 폭 (96 DPI 기준 픽셀).</summary>
+        const int EdgeReach = 60;
 
         void Key_MoveStarted(object sender, EventArgs e)
         {
             var k = (DeckKey)sender;
             movePageId = CurrentPage.Id;
+            moveKey = k;
             tip.Active = false; // 끄는 동안 설명 풍선이 따라다니지 않게
             EndGhost();
             moveGhost = new DragGhost(k.Snapshot(), k.PointToClient(Cursor.Position));
             moveGhost.MoveTo(Cursor.Position);
             moveGhost.Show();
             k.MoveSource = true;
+            edgeSide = 0;
+            edgeTimer.Start();
         }
 
         void Key_MoveDragged(DeckKey k, Point screen)
         {
             if (moveGhost != null) moveGhost.MoveTo(screen);
+            UpdateMoveTarget(screen);
+        }
+
+        /// <summary>마우스 아래 칸에 파란 테두리. 원래 페이지에서는 옮기는 버튼의 제자리를 빼고.</summary>
+        void UpdateMoveTarget(Point screen)
+        {
             DeckKey target = KeyAt(screen);
-            if (target == k) target = null;
+            if (target == moveKey && CurrentPage.Id == movePageId) target = null;
             if (target == moveTarget) return;
             if (moveTarget != null) moveTarget.MoveTarget = false;
             moveTarget = target;
@@ -762,13 +795,143 @@ namespace WinDeck
         void Key_MoveEnded(DeckKey k, Point screen, bool cancelled)
         {
             DeckKey target = cancelled ? null : KeyAt(screen);
+            StopEdge();
+            moveKey = null;
             k.MoveSource = false;
             if (moveTarget != null) moveTarget.MoveTarget = false;
             moveTarget = null;
             EndGhost();
             tip.Active = true;
-            if (target == null || target == k) return; // 패널 밖이나 제자리에 놓으면 그대로 둔다
-            SwapKeys(movePageId, k.Index, target.Index);
+            bool samePage = CurrentPage.Id == movePageId;
+            if (target != null && !(samePage && target == k))
+            {
+                if (samePage) SwapKeys(movePageId, k.Index, target.Index);
+                else if (!MoveKeyToSlot(movePageId, k.Index, CurrentPage.Id, target.Index)) GoToPage(movePageId);
+                return;
+            }
+            // 패널 밖이나 제자리에 놓으면 그대로 둔다. 다른 페이지로 넘어가 있었으면 버튼이 있는 원래 페이지로 돌아간다.
+            if (!samePage) GoToPage(movePageId);
+        }
+
+        /// <summary>
+        /// 버튼을 끄는 중 페이지를 넘기는 자리: 패널 왼쪽·오른쪽 가장자리 (패널 밖 조금까지)와 위쪽 ◀ ▶ 버튼.
+        /// -1 = 이전 페이지, 1 = 다음 페이지, 0 = 넘기지 않음.
+        /// </summary>
+        public int PageEdgeAt(Point screen)
+        {
+            if (cfg.Pages.Count <= 1) return 0;
+            Point p = PointToClient(screen);
+            if (btnPrev.Bounds.Contains(p)) return -1;
+            if (btnNext.Bounds.Contains(p)) return 1;
+            if (p.Y < 0 || p.Y >= ClientSize.Height) return 0;
+            int reach = S(EdgeReach);
+            if (p.X < gridRect.Left && p.X >= -reach) return -1;
+            if (p.X >= gridRect.Right && p.X < ClientSize.Width + reach) return 1;
+            return 0;
+        }
+
+        /// <summary>끄는 중 계속 불린다: 가장자리에 정해진 시간만큼 머물면 페이지를 넘긴다 (끝 페이지 다음은 첫 페이지).</summary>
+        void EdgeTick(Point screen)
+        {
+            if (moveKey == null || !moveKey.IsMoving)
+            {
+                StopEdge();
+                return;
+            }
+            int side = PageEdgeAt(screen);
+            if (side != edgeSide)
+            {
+                InvalidateEdgeHints();
+                edgeSide = side;
+                edgeSince = DateTime.Now;
+                edgeWaitMs = EdgeFirstMs;
+                InvalidateEdgeHints();
+                return;
+            }
+            if (side == 0) return;
+            if ((DateTime.Now - edgeSince).TotalMilliseconds >= edgeWaitMs)
+            {
+                ChangePage(side);
+                edgeSince = DateTime.Now;
+                edgeWaitMs = EdgeRepeatMs;
+            }
+            InvalidateEdgeHints();
+        }
+
+        void StopEdge()
+        {
+            edgeTimer.Stop();
+            if (edgeSide == 0) return;
+            InvalidateEdgeHints();
+            edgeSide = 0;
+        }
+
+        /// <summary>가장자리 표시 막대 자리: 버튼 칸과 패널 테두리 사이의 여백.</summary>
+        Rectangle EdgeHintRect(int side)
+        {
+            int w = Math.Max(3, S(4));
+            int x = side < 0
+                ? Math.Max(1, (gridRect.Left - w) / 2)
+                : gridRect.Right + Math.Max(0, (ClientSize.Width - gridRect.Right - w) / 2);
+            return new Rectangle(x, gridRect.Top, w, gridRect.Height);
+        }
+
+        void InvalidateEdgeHints()
+        {
+            if (edgeSide == 0) return;
+            Rectangle r = EdgeHintRect(edgeSide);
+            r.Inflate(2, 2);
+            Invalidate(r);
+        }
+
+        /// <summary>머무는 쪽 여백에 파란 막대. 넘기기까지 남은 시간만큼 가운데부터 채운다.</summary>
+        void DrawEdgeHint(Graphics g)
+        {
+            if (edgeSide == 0 || moveKey == null) return;
+            Rectangle r = EdgeHintRect(edgeSide);
+            double progress = Math.Min(1.0, (DateTime.Now - edgeSince).TotalMilliseconds / Math.Max(1, edgeWaitMs));
+            float radius = r.Width / 2f;
+            SmoothingMode old = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var track = new SolidBrush(Color.FromArgb(90, Theme.Accent)))
+            using (GraphicsPath path = Theme.RoundRect(r, radius))
+                g.FillPath(track, path);
+            int h = (int)Math.Round(r.Height * progress);
+            if (h >= r.Width)
+            {
+                var fill = new Rectangle(r.X, r.Y + (r.Height - h) / 2, r.Width, h);
+                using (var brush = new SolidBrush(Theme.Accent))
+                using (GraphicsPath path = Theme.RoundRect(fill, radius))
+                    g.FillPath(brush, path);
+            }
+            g.SmoothingMode = old;
+        }
+
+        /// <summary>점검용: 지금 머물고 있는 가장자리 (-1, 0, 1).</summary>
+        public int EdgeHintSide
+        {
+            get { return edgeSide; }
+        }
+
+        /// <summary>
+        /// 버튼을 다른 페이지의 정한 칸으로 옮긴다 (끌어서 페이지를 넘긴 뒤 놓을 때).
+        /// 그 칸에 버튼이 있으면 그 버튼은 원래 페이지의 빈자리로 간다. 버튼의 단축키도 버튼과 함께 옮겨 간다.
+        /// </summary>
+        public bool MoveKeyToSlot(string fromPageId, int from, string toPageId, int to)
+        {
+            if (fromPageId == toPageId) return SwapKeys(fromPageId, from, to);
+            SyncFromDisk();
+            DeckPage src = cfg.Pages.Find(p => p.Id == fromPageId);
+            DeckPage dst = cfg.Pages.Find(p => p.Id == toPageId);
+            if (src == null || dst == null || from < 0 || to < 0 || from >= src.Buttons.Count || to >= dst.Buttons.Count) return false;
+            DeckButton moved = src.Buttons[from];
+            if (moved == null || moved.IsEmpty) return false;
+            DeckButton other = dst.Buttons[to];
+            dst.Buttons[to] = moved;
+            src.Buttons[from] = other ?? new DeckButton();
+            ConfigChanged();
+            if (CurrentPage == dst) keys[to].Flash(Theme.Accent);
+            return true;
         }
 
         void EndGhost()

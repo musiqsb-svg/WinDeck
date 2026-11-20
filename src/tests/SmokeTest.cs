@@ -113,6 +113,7 @@ static partial class SmokeTest
         Safe("v13", TestV13);
         Safe("v14", TestV14);
         Safe("v15", TestV15);
+        Safe("v16", TestV16);
         if (packageDir != null) Safe("setup", () => TestSetup(packageDir));
         if (args.Contains("--actions")) Safe("real actions", TestRealActions);
         if (args.Contains("--input")) Safe("input", TestInput);
@@ -1000,6 +1001,7 @@ static partial class SmokeTest
                 Check(dropped.Action == ActionTypes.Url && dropped.Title == "naver.com", "dropping a link creates a link button", dropped.Action + " " + dropped.Title);
 
                 TestMouseMove(deck);
+                TestMouseEdgeFlip(deck);
             }
         }
         finally
