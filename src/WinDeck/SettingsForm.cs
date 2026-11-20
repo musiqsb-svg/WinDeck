@@ -174,6 +174,10 @@ namespace WinDeck
             AddSideButton("삭제", 114, delegate { DeletePage(); });
             AddSideButton("위로 ▲", 148, delegate { MovePage(-1); });
             AddSideButton("아래로 ▼", 182, delegate { MovePage(1); });
+            var btnSiteIcons = new Button { Text = "사이트 아이콘…", Location = new Point(310, 288), Size = new Size(100, 28) };
+            btnSiteIcons.Click += delegate { AddSiteIcons(); };
+            tabPages.Controls.Add(btnSiteIcons);
+            tips.SetToolTip(btnSiteIcons, "아이콘이 없는 링크 버튼에 사이트 아이콘을 넣습니다 (모든 페이지). 직접 고른 아이콘은 바꾸지 않습니다.");
 
             // ---- 백업
             AddHint(tabBackup, "모든 페이지·버튼·아이콘·단축키를 .json 파일 하나로 저장하거나 불러옵니다.\n"
@@ -639,6 +643,25 @@ namespace WinDeck
             RefreshPages(j);
         }
 
+        /// <summary>아이콘이 없는 링크 버튼(모든 페이지)에 사이트 아이콘을 넣는다. 설정 사본에 넣으므로 [확인]을 눌러야 저장된다.</summary>
+        void AddSiteIcons()
+        {
+            var names = new List<string>();
+            List<DeckButton> targets = SiteIconBatchForm.FindTargets(working, names);
+            if (targets.Count == 0)
+            {
+                MessageBox.Show(this, "아이콘이 없는 링크 버튼이 없습니다.\n(직접 고른 아이콘이 있는 버튼은 바꾸지 않습니다)", "사이트 아이콘",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (!SiteIcon.Enabled)
+            {
+                MessageBox.Show(this, "점검 중에는 사이트 아이콘을 받지 않습니다.", "사이트 아이콘", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using (var f = new SiteIconBatchForm(targets, names)) f.ShowDialog(this);
+        }
+
         // ------------------------------------------------------------------ backup / accept
 
         void ImportConfig()
@@ -996,6 +1019,173 @@ namespace WinDeck
         {
             using (var d = new HotkeyDialog(title, prompt, initial, validate))
                 return d.ShowDialog(owner) == DialogResult.OK ? d.Value : null;
+        }
+    }
+
+    /// <summary>
+    /// 아이콘이 없는 링크 버튼들에 사이트 아이콘을 차례로 받아 넣는다. 같은 사이트(호스트)는 한 번만 받는다.
+    /// 넘겨받은 버튼(설정 창의 사본)에 바로 넣는다. 저장은 설정 창의 [확인]이 한다.
+    /// </summary>
+    public class SiteIconBatchForm : Form
+    {
+        readonly List<DeckButton> targets;
+        readonly List<string> names;
+        readonly ProgressBar bar;
+        readonly Label lblStatus;
+        readonly ListBox lstFailed;
+        readonly Button btnClose;
+        volatile bool cancelled;
+        bool running, closeRequested;
+
+        /// <summary>넣은 아이콘 수.</summary>
+        public int Applied { get; private set; }
+
+        /// <summary>사이트 아이콘을 넣을 버튼 (모든 페이지의 숨긴 칸 포함). names 에는 "페이지 · 버튼 이름"을 채운다.</summary>
+        public static List<DeckButton> FindTargets(AppConfig cfg, List<string> names)
+        {
+            var list = new List<DeckButton>();
+            foreach (DeckPage p in cfg.Pages)
+            {
+                foreach (DeckButton b in p.Buttons)
+                {
+                    if (!SiteIcon.Wants(b)) continue;
+                    list.Add(b);
+                    if (names != null) names.Add(p.Name + " · " + (b.Title.Trim().Length > 0 ? b.Title.Trim() : b.Target));
+                }
+            }
+            return list;
+        }
+
+        public SiteIconBatchForm(List<DeckButton> targets, List<string> names)
+        {
+            this.targets = targets;
+            this.names = names;
+            SuspendLayout();
+            Text = "사이트 아이콘 넣기";
+            Font = new Font(Theme.UiFontName, 9f);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            ShowIcon = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(440, 302);
+
+            Controls.Add(new Label
+            {
+                Text = "아이콘이 없는 링크 버튼 " + targets.Count + "개에 사이트 아이콘을 넣습니다.\n직접 고른 아이콘이 있는 버튼은 바꾸지 않습니다.",
+                AutoSize = true,
+                Location = new Point(16, 14)
+            });
+            bar = new ProgressBar { Location = new Point(16, 56), Size = new Size(408, 20), Minimum = 0, Maximum = Math.Max(1, targets.Count) };
+            lblStatus = new Label { AutoSize = false, AutoEllipsis = true, Location = new Point(16, 84), Size = new Size(408, 18) };
+            Controls.Add(bar);
+            Controls.Add(lblStatus);
+            Controls.Add(new Label { Text = "받지 못한 버튼", AutoSize = true, Location = new Point(16, 112), ForeColor = SystemColors.GrayText });
+            lstFailed = new ListBox { IntegralHeight = false, HorizontalScrollbar = true, Location = new Point(16, 132), Size = new Size(408, 120), SelectionMode = SelectionMode.None };
+            Controls.Add(lstFailed);
+            btnClose = new Button { Text = "멈추기", Location = new Point(332, 262), Size = new Size(92, 30) };
+            btnClose.Click += delegate { CloseOrStop(); };
+            Controls.Add(btnClose);
+            CancelButton = btnClose;
+
+            // DPI 배율은 모든 컨트롤을 추가한 뒤에 지정해야 크기가 두 번 커지지 않는다.
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ResumeLayout(false);
+            PerformLayout();
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            Start();
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // 받는 중에는 지금 사이트까지만 받고 닫는다 (뒤 작업이 닫힌 창을 건드리지 않게).
+            if (running)
+            {
+                e.Cancel = true;
+                closeRequested = true;
+                Stop();
+            }
+            base.OnFormClosing(e);
+        }
+
+        void CloseOrStop()
+        {
+            if (running) Stop();
+            else Close();
+        }
+
+        void Stop()
+        {
+            cancelled = true;
+            btnClose.Enabled = false;
+            lblStatus.Text = "멈추는 중… (지금 받는 사이트까지만 받습니다)";
+        }
+
+        void Start()
+        {
+            running = true;
+            List<string> urls = targets.ConvertAll(b => b.Target);
+            lblStatus.Text = "받는 중… 0 / " + urls.Count;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                var icons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var errors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < urls.Count && !cancelled; i++)
+                {
+                    Uri page = SiteIcon.PageUri(urls[i]);
+                    string site = page == null ? urls[i] : page.Host;
+                    string data, error = null;
+                    if (!icons.TryGetValue(site, out data) && !errors.TryGetValue(site, out error))
+                    {
+                        try { data = SiteIcon.Fetch(urls[i], out error); }
+                        catch (Exception ex) { error = ex.Message; }
+                        if (data != null) icons[site] = data;
+                        else errors[site] = error;
+                    }
+                    int index = i;
+                    string d = data, err = error;
+                    try { BeginInvoke(new Action(delegate { OnResult(index, d, err); })); }
+                    catch (InvalidOperationException) { return; }
+                }
+                try { BeginInvoke(new Action(Finish)); }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        void OnResult(int index, string data, string error)
+        {
+            bar.Value = Math.Min(bar.Maximum, index + 1);
+            DeckButton b = targets[index];
+            if (data != null && string.IsNullOrEmpty(b.IconData))
+            {
+                b.IconData = data;
+                Applied++;
+            }
+            else if (data == null)
+            {
+                lstFailed.Items.Add(names[index] + "  —  " + (error ?? "받지 못했습니다."));
+            }
+            if (!cancelled) lblStatus.Text = "받는 중… " + (index + 1) + " / " + targets.Count;
+        }
+
+        void Finish()
+        {
+            running = false;
+            if (!cancelled) bar.Value = bar.Maximum;
+            btnClose.Enabled = true;
+            btnClose.Text = "닫기";
+            string done = targets.Count + "개 중 " + Applied + "개에 넣었습니다.";
+            if (cancelled) done = "멈췄습니다. " + done;
+            if (Applied > 0) done += " 설정 창의 [확인]을 누르면 저장됩니다.";
+            lblStatus.Text = done;
+            if (lstFailed.Items.Count == 0) lstFailed.Items.Add("(없음)");
+            if (closeRequested) Close();
         }
     }
 }

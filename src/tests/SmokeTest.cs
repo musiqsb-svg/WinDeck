@@ -94,6 +94,7 @@ static partial class SmokeTest
         old13Zip = oldArg >= 0 && oldArg + 1 < args.Length ? args[oldArg + 1] : null;
         string realSettings = RealSettingsFingerprint();
         ConfigStore.Dir = Path.Combine(outDir, "cfg");
+        SiteIcon.Enabled = false; // 끌어 놓기 점검이 인터넷에서 사이트 아이콘을 받지 않게 (v15 점검만 시험용 서버로 켠다)
         if (Directory.Exists(ConfigStore.Dir)) Directory.Delete(ConfigStore.Dir, true);
 
         using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
@@ -111,6 +112,7 @@ static partial class SmokeTest
         Safe("final qa", TestFinalQa);
         Safe("v13", TestV13);
         Safe("v14", TestV14);
+        Safe("v15", TestV15);
         if (packageDir != null) Safe("setup", () => TestSetup(packageDir));
         if (args.Contains("--actions")) Safe("real actions", TestRealActions);
         if (args.Contains("--input")) Safe("input", TestInput);

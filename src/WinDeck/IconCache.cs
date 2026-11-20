@@ -181,7 +181,12 @@ namespace WinDeck
                     src = new Bitmap(im);
             }
 
-            using (src)
+            using (src) return ToIconData(src);
+        }
+
+        /// <summary>이미지를 설정에 넣는 버튼 아이콘 데이터(긴 변 128px 이하 PNG, base64)로 바꾼다.</summary>
+        public static string ToIconData(Image src)
+        {
             using (Bitmap scaled = Fit(src, StoredIconSize))
             using (var ms = new MemoryStream())
             {

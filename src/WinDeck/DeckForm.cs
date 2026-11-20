@@ -54,7 +54,8 @@ namespace WinDeck
         int wheelAccum;
         bool exiting, hideHintShown, dialogOpen, dwmBorder;
         FileSystemWatcher watcher;
-        readonly Timer reloadTimer, maintenanceTimer;
+        readonly Timer reloadTimer, maintenanceTimer, siteIconTimer;
+        readonly List<PendingSiteIcon> pendingSiteIcons = new List<PendingSiteIcon>();
         ToolStripMenuItem trayUpdateItem;
         UpdateInfo pendingUpdate;
         bool updateChecking, balloonIsUpdate;
@@ -133,6 +134,15 @@ namespace WinDeck
                 if (dialogOpen) return; // 대화상자를 닫은 뒤 다시 확인
                 reloadTimer.Stop();
                 SyncFromDisk();
+            };
+
+            // 뒤에서 받은 사이트 아이콘은 열린 대화상자가 없을 때 넣는다 (대화상자가 가진 설정 사본과 부딪치지 않게).
+            siteIconTimer = new Timer { Interval = 300 };
+            siteIconTimer.Tick += delegate
+            {
+                if (dialogOpen) return;
+                siteIconTimer.Stop();
+                ApplyPendingSiteIcons();
             };
 
             // 하루 백업, 하루 한 번 업데이트 확인 (시작 1분 뒤, 그 뒤로 한 시간마다 점검)
@@ -863,36 +873,139 @@ namespace WinDeck
             var k = (DeckKey)sender;
             DeckButton b = ButtonFromDrop(e.Data);
             if (b == null) return;
+            // 링크면 이름을 묻는 동안 사이트 아이콘을 받기 시작한다. 버튼을 만들지 않으면 받은 아이콘은 버린다.
+            PendingSiteIcon icon = null;
+            if (SiteIcon.Enabled && SiteIcon.Wants(b))
+            {
+                icon = new PendingSiteIcon { PageId = CurrentPage.Id, Index = k.Index, Target = b.Target };
+                FetchSiteIconLater(icon);
+            }
             var files = e.Data.GetData(DataFormats.FileDrop) as string[];
             string json = files != null && files.Length == 1 && files[0].EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? files[0] : null;
             // 끌어온 프로그램이 응답을 기다리지 않도록 확인 창은 드롭이 끝난 뒤에 띄운다.
             BeginInvoke(new Action(delegate
             {
-                // 받은 설정 파일(.json)을 패널에 끌어놓으면 버튼 대신 설정 불러오기를 권한다.
-                if (json != null && ConfigStore.LooksLikeConfigFile(json))
+                try
                 {
-                    DialogResult r = MessageBox.Show(this, "'" + Path.GetFileName(json) + "' 은(는) WinDeck 설정 파일입니다.\n\n"
-                        + "[예]  이 설정 불러오기 (지금 설정은 자동으로 백업)\n[아니요]  이 파일을 여는 버튼 만들기",
-                        "WinDeck", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                    if (r == DialogResult.Yes)
-                    {
-                        ImportFile(json, false);
-                        return;
-                    }
-                    if (r != DialogResult.No) return;
+                    if (PlaceDroppedButton(k, b, json) && icon != null) icon.Placed = true;
                 }
-                if (!ConfirmReplace(k.Data, "'" + b.Title + "'")) return;
-                string pageId = CurrentPage.Id;
-                string name = AskDroppedButtonName(b);
-                if (name == null) return; // [취소]: 버튼을 만들지 않는다
-                b.Title = name;
-                SyncFromDisk();
-                DeckPage page = cfg.Pages.Find(p => p.Id == pageId);
-                if (page == null) return;
-                page.Buttons[k.Index] = b;
-                ConfigChanged();
-                if (CurrentPage == page) k.Flash(Theme.Accent);
+                finally
+                {
+                    if (icon != null)
+                    {
+                        icon.Decided = true;
+                        if (pendingSiteIcons.Count > 0) siteIconTimer.Start();
+                    }
+                }
             }));
+        }
+
+        /// <summary>끌어 놓은 것으로 버튼을 만든다 (설정 파일이면 불러오기를 권함, 이름 묻기). 버튼을 만들었으면 true.</summary>
+        bool PlaceDroppedButton(DeckKey k, DeckButton b, string json)
+        {
+            // 받은 설정 파일(.json)을 패널에 끌어놓으면 버튼 대신 설정 불러오기를 권한다.
+            if (json != null && ConfigStore.LooksLikeConfigFile(json))
+            {
+                DialogResult r = MessageBox.Show(this, "'" + Path.GetFileName(json) + "' 은(는) WinDeck 설정 파일입니다.\n\n"
+                    + "[예]  이 설정 불러오기 (지금 설정은 자동으로 백업)\n[아니요]  이 파일을 여는 버튼 만들기",
+                    "WinDeck", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (r == DialogResult.Yes)
+                {
+                    ImportFile(json, false);
+                    return false;
+                }
+                if (r != DialogResult.No) return false;
+            }
+            if (!ConfirmReplace(k.Data, "'" + b.Title + "'")) return false;
+            string pageId = CurrentPage.Id;
+            string name = AskDroppedButtonName(b);
+            if (name == null) return false; // [취소]: 버튼을 만들지 않는다
+            b.Title = name;
+            SyncFromDisk();
+            DeckPage page = cfg.Pages.Find(p => p.Id == pageId);
+            if (page == null) return false;
+            page.Buttons[k.Index] = b;
+            ConfigChanged();
+            if (CurrentPage == page) k.Flash(Theme.Accent);
+            return true;
+        }
+
+        /// <summary>끌어 놓은 링크에 넣을 사이트 아이콘. 드롭 처리가 끝나야(Decided) 넣거나 버린다.</summary>
+        class PendingSiteIcon
+        {
+            public string PageId, Target, Data;
+            public int Index;
+            public volatile bool Decided, Placed;
+        }
+
+        /// <summary>링크 버튼에 넣을 사이트 아이콘을 뒤에서 받는다. 받으면 대화상자가 모두 닫힌 뒤 넣는다.</summary>
+        void FetchSiteIconLater(PendingSiteIcon icon)
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                string data = null, error;
+                try { data = SiteIcon.Fetch(icon.Target, out error); }
+                catch (Exception ex) { ErrorLog.Write(ex); }
+                if (data == null) return; // 못 받으면 지금처럼 기본 모양으로 둔다
+                icon.Data = data;
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        pendingSiteIcons.Add(icon);
+                        siteIconTimer.Start();
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        /// <summary>
+        /// 받은 사이트 아이콘을 넣는다. 그 자리의 버튼이 아직 같은 주소의 링크이고 아이콘이 없을 때만 넣는다.
+        /// 그사이 버튼을 옮겼으면 같은 주소이고 아이콘이 없는 링크 버튼을 찾아 넣는다. 사용자가 고른 아이콘은 바꾸지 않는다.
+        /// 드롭 처리가 아직 끝나지 않은(이름을 묻는 중인) 아이콘은 남겨 두고, 버튼을 만들지 않았으면 버린다.
+        /// </summary>
+        void ApplyPendingSiteIcons()
+        {
+            if (pendingSiteIcons.Count == 0) return;
+            List<PendingSiteIcon> ready = pendingSiteIcons.FindAll(x => x.Decided);
+            pendingSiteIcons.RemoveAll(x => x.Decided);
+            ready.RemoveAll(x => !x.Placed);
+            if (ready.Count == 0) return;
+            SyncFromDisk();
+            bool changed = false;
+            foreach (PendingSiteIcon p in ready)
+            {
+                DeckButton target = null;
+                DeckPage page = cfg.Pages.Find(x => x.Id == p.PageId);
+                DeckButton there = page != null && p.Index >= 0 && p.Index < page.Buttons.Count ? page.Buttons[p.Index] : null;
+                bool stillThere = there != null && there.Action == ActionTypes.Url && there.Target == p.Target;
+                if (stillThere)
+                {
+                    // 그 자리에 있으면 그 버튼에만 넣는다. 그사이 사용자가 아이콘을 골랐으면 버린다.
+                    if (string.IsNullOrEmpty(there.IconData)) target = there;
+                }
+                else
+                {
+                    // 버튼을 옮겼다: 같은 주소이고 아이콘이 없는 링크 버튼을 찾는다.
+                    foreach (DeckPage pg in cfg.Pages)
+                    {
+                        target = pg.Buttons.Find(x => NeedsSiteIcon(x, p.Target));
+                        if (target != null) break;
+                    }
+                }
+                if (target == null) continue;
+                target.IconData = p.Data;
+                changed = true;
+            }
+            if (!changed) return;
+            SaveConfig();
+            RefreshKeys();
+        }
+
+        static bool NeedsSiteIcon(DeckButton b, string target)
+        {
+            return b != null && b.Action == ActionTypes.Url && b.Target == target && string.IsNullOrEmpty(b.IconData);
         }
 
         /// <summary>끌어 놓아 만든 버튼의 이름을 묻는다 (자동 이름이 미리 들어 있음). [취소]면 null.</summary>

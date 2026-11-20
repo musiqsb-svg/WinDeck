@@ -58,6 +58,9 @@ namespace WinDeck
         TextBox txtBackHex, txtForeHex;
         KeyPreview preview;
         ToolTip tips;
+        Button btnSiteIcon;
+        Label lblSiteIcon;
+        int siteIconRequest;
 
         public DeckButton Result { get; private set; }
 
@@ -253,6 +256,12 @@ namespace WinDeck
             txtUrl = new TextBox { Location = new Point(104, 0), Size = new Size(330, 23) };
             p.Controls.Add(txtUrl);
             AddHint(p, "예: https://www.naver.com   (https:// 는 생략 가능)\nmailto: · ms-settings: 같은 링크도 됩니다.", 104, 32);
+            btnSiteIcon = new Button { Text = "사이트 아이콘 넣기", Location = new Point(104, 74), Size = new Size(150, 28) };
+            btnSiteIcon.Click += delegate { FetchSiteIcon(); };
+            p.Controls.Add(btnSiteIcon);
+            tips.SetToolTip(btnSiteIcon, "이 주소의 사이트에서 아이콘을 받아 버튼에 넣습니다. 지금 아이콘은 바뀝니다.");
+            lblSiteIcon = new Label { AutoSize = false, AutoEllipsis = true, Location = new Point(104, 108), Size = new Size(330, 36), ForeColor = SystemColors.GrayText };
+            p.Controls.Add(lblSiteIcon);
 
             p = NewPanel(ActionTypes.Text);
             AddLabel(p, "입력할 문장", 0, 3);
@@ -530,6 +539,50 @@ namespace WinDeck
                     MessageBox.Show(this, "이미지를 읽지 못했습니다.\n" + ex.Message, "버튼 편집", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
+        }
+
+        /// <summary>링크 주소의 사이트에서 아이콘을 받아 이 버튼의 아이콘으로 넣는다 (뒤에서 받아 창이 멈추지 않음).</summary>
+        void FetchSiteIcon()
+        {
+            string url = txtUrl.Text.Trim();
+            if (SiteIcon.PageUri(url) == null)
+            {
+                lblSiteIcon.Text = "웹사이트 주소(http·https)를 먼저 입력하세요.";
+                return;
+            }
+            if (!SiteIcon.Enabled)
+            {
+                lblSiteIcon.Text = "점검 중에는 사이트 아이콘을 받지 않습니다.";
+                return;
+            }
+            int request = ++siteIconRequest;
+            btnSiteIcon.Enabled = false;
+            lblSiteIcon.Text = "사이트 아이콘을 받는 중…";
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                string data = null, error = null;
+                try { data = SiteIcon.Fetch(url, out error); }
+                catch (Exception ex) { error = ex.Message; }
+                try
+                {
+                    BeginInvoke(new Action(delegate { OnSiteIcon(request, data, error); }));
+                }
+                catch (InvalidOperationException) { } // 창을 닫았다
+            });
+        }
+
+        void OnSiteIcon(int request, string data, string error)
+        {
+            if (IsDisposed || request != siteIconRequest) return;
+            btnSiteIcon.Enabled = true;
+            if (data == null)
+            {
+                lblSiteIcon.Text = error ?? "사이트 아이콘을 받지 못했습니다.";
+                return;
+            }
+            iconData = data;
+            lblSiteIcon.Text = "사이트 아이콘을 넣었습니다. [확인]을 누르면 저장됩니다.";
+            UpdateAppearance();
         }
 
         string PickColor(string current, Color fallback)
