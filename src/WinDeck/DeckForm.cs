@@ -59,7 +59,7 @@ namespace WinDeck
         int wheelAccum;
         bool exiting, hideHintShown, dialogOpen, dwmBorder;
         FileSystemWatcher watcher;
-        readonly Timer reloadTimer, maintenanceTimer, siteIconTimer;
+        readonly Timer reloadTimer, maintenanceTimer, siteIconTimer, screenTimer;
         readonly List<PendingSiteIcon> pendingSiteIcons = new List<PendingSiteIcon>();
         ToolStripMenuItem trayUpdateItem;
         UpdateInfo pendingUpdate;
@@ -155,6 +155,14 @@ namespace WinDeck
             edgeTimer = new Timer { Interval = 40 };
             edgeTimer.Tick += delegate { EdgeTick(Cursor.Position); };
 
+            // 화면 구성이 바뀐 뒤 패널이 화면 밖에 남았는지 한 번 본다.
+            screenTimer = new Timer { Interval = 700 };
+            screenTimer.Tick += delegate
+            {
+                screenTimer.Stop();
+                RescueIfOffScreen();
+            };
+
             // 하루 백업, 하루 한 번 업데이트 확인 (시작 1분 뒤, 그 뒤로 한 시간마다 점검)
             maintenanceTimer = new Timer { Interval = 60 * 1000 };
             maintenanceTimer.Tick += delegate
@@ -175,6 +183,12 @@ namespace WinDeck
         {
             get { return cfg; }
         }
+
+        /// <summary>
+        /// 설치 파일이 업데이트에 실패해서 쓰던 WinDeck 을 다시 켠 것이면 true (WinDeck.exe --update-failed).
+        /// 패널이 처음 보일 때 트레이 알림으로 알린다.
+        /// </summary>
+        public bool UpdateFailedOnStart { get; set; }
 
         DeckPage CurrentPage
         {
@@ -217,6 +231,30 @@ namespace WinDeck
                 return;
             }
             base.WndProc(ref m);
+            // 모니터를 뽑거나 해상도·작업 표시줄이 바뀌면, 잠시 뒤(Windows 가 화면 정보를 고친 뒤) 패널이 화면 밖에 남았는지 본다.
+            if ((m.Msg == Native.WM_DISPLAYCHANGE || m.Msg == Native.WM_SETTINGCHANGE) && screenTimer != null && !exiting)
+            {
+                screenTimer.Stop();
+                screenTimer.Start();
+            }
+        }
+
+        /// <summary>
+        /// 보이는 패널이 어느 화면에도 (거의) 걸쳐 있지 않으면 가장 가까운 화면 안으로 옮긴다.
+        /// 사용자가 일부러 화면 가장자리에 걸쳐 둔 패널은 건드리지 않는다. 옮겼으면 true.
+        /// </summary>
+        public bool RescueIfOffScreen()
+        {
+            if (!Visible || dragging) return false;
+            int need = S(40);
+            foreach (Screen s in Screen.AllScreens)
+            {
+                Rectangle seen = Rectangle.Intersect(s.WorkingArea, Bounds);
+                if (seen.Width >= Math.Min(need, Width) && seen.Height >= Math.Min(need, Height)) return false;
+            }
+            Point before = Location;
+            ClampToScreen();
+            return Location != before;
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -249,6 +287,12 @@ namespace WinDeck
             if (ConfigStore.LoadWarning != null)
             {
                 ShowWarning(ConfigStore.LoadWarning);
+            }
+            else if (UpdateFailedOnStart)
+            {
+                Balloon(15000, "업데이트를 끝내지 못했습니다",
+                    "쓰던 버전(v" + AppInfo.Version + ")을 다시 켰습니다. 버튼과 설정은 그대로입니다.\n"
+                    + "트레이 아이콘 우클릭 → 업데이트 확인으로 다시 시도할 수 있습니다.", ToolTipIcon.Warning);
             }
             else if (ConfigStore.MigratedFrom != null)
             {
@@ -291,9 +335,22 @@ namespace WinDeck
                 reloadTimer.Dispose();
                 maintenanceTimer.Dispose();
                 edgeTimer.Dispose();
+                siteIconTimer.Dispose();
+                screenTimer.Dispose();
+                EndGhost();
                 if (watcher != null) watcher.Dispose();
                 if (bgCache != null) bgCache.Dispose();
                 if (tray != null) tray.Dispose();
+                if (trayMenu != null) trayMenu.Dispose();
+                if (trayBoldFont != null) trayBoldFont.Dispose();
+                tip.Dispose();
+                keyMenu.Dispose();
+                panelMenu.Dispose();
+                titleFont.Dispose();
+                countFont.Dispose();
+                tipTitleFont.Dispose();
+                tipBodyFont.Dispose();
+                tipDetailFont.Dispose();
             }
             base.Dispose(disposing);
         }
@@ -304,6 +361,7 @@ namespace WinDeck
         {
             if (Math.Abs(Opacity - cfg.Opacity / 100.0) > 0.001) Opacity = cfg.Opacity / 100.0;
             if (TopMost != cfg.TopMost) TopMost = cfg.TopMost;
+            IconCache.ForgetShellIcons(); // 설정이 바뀌었다: 못 찾았던 프로그램 아이콘을 다시 찾아본다
             DoLayoutPanel();
             if (first)
             {
@@ -439,6 +497,16 @@ namespace WinDeck
             Size ns = TextRenderer.MeasureText(g, name, titleFont, Size.Empty, flags);
             // 좁은 세로 배치에서는 페이지 번호보다 이름을 우선해서 보여준다.
             bool showCount = ns.Width + S(6) + cs.Width <= titleRect.Width;
+            if (!showCount && ns.Width > titleRect.Width && titleRect.Width < S(40))
+            {
+                // 이름이 "…" 로만 보일 만큼 좁다 (세로 8칸, 작은 버튼): 이름 대신 페이지 번호를 보여준다. 이름은 설명 풍선에 있다.
+                // ◀ ▶ 와 설정 버튼 사이의 빈 곳 한가운데에 그린다.
+                var between = Rectangle.FromLTRB(btnNext.Right, titleRect.Top, btnSettings.Left, titleRect.Bottom);
+                TextRenderer.DrawText(g, count, countFont, between, barText,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix
+                    | TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
+                return;
+            }
             int nameWidth = showCount ? ns.Width : titleRect.Width;
             var nameRect = new Rectangle(titleRect.X, titleRect.Y, nameWidth, titleRect.Height);
             if (bgHasImage) // 사진 위에서도 읽히도록 그림자
@@ -477,6 +545,11 @@ namespace WinDeck
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            if (dragging && (Control.MouseButtons & MouseButtons.Left) == 0)
+            {
+                // 버튼을 뗀 알림을 받지 못했다 (끄는 중 확인 창이 뜨거나 화면이 잠김): 끌기를 끝낸다.
+                EndPanelDrag();
+            }
             if (!dragging)
             {
                 Cursor = titleRect.Contains(e.Location) ? Cursors.SizeAll : Cursors.Default;
@@ -497,15 +570,30 @@ namespace WinDeck
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (e.Button == MouseButtons.Left) EndPanelDrag();
+        }
+
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            base.OnMouseCaptureChanged(e);
+            // 끄는 중 다른 창이 마우스를 가져가면 (확인 창, 메뉴 등) 버튼을 뗀 알림이 오지 않는다.
+            if (dragging && !Capture) EndPanelDrag();
+        }
+
+        /// <summary>패널 끌기를 끝낸다. 패널이 실제로 움직였을 때만 위치를 저장한다 (클릭만 했으면 설정 파일을 다시 쓰지 않는다).</summary>
+        void EndPanelDrag()
+        {
             if (!dragging) return;
             dragging = false;
-            SavePosition();
+            if (Location != dragOrigin) SavePosition();
         }
 
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             base.OnMouseWheel(e);
             HandleWheel(e.Delta);
+            var handled = e as HandledMouseEventArgs;
+            if (handled != null) handled.Handled = true;
         }
 
         void HandleWheel(int delta)
@@ -666,9 +754,15 @@ namespace WinDeck
                 new ToolStripMenuItem("페이지 추가…", null, delegate { AddPage(); }),
                 new ToolStripMenuItem("설정…", null, delegate { OpenSettings(); })
             });
-            m.Opening += delegate
+            m.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
             {
+                if (moveKey != null || unchecked(Environment.TickCount - moveCancelledTick) < 400)
+                {
+                    e.Cancel = true; // 버튼을 끄는 중의 우클릭은 끌기 취소다: 메뉴를 열지 않는다
+                    return;
+                }
                 menuKey = m.SourceControl as DeckKey;
+                menuPageId = CurrentPage.Id;
                 DeckKey k = menuKey;
                 bool has = k != null && k.Data != null && !k.Data.IsEmpty;
                 miRun.Enabled = has && k.Data.Action != ActionTypes.None;
@@ -792,8 +886,12 @@ namespace WinDeck
             if (target != null) target.MoveTarget = true;
         }
 
+        /// <summary>끌기를 취소한 때 (Environment.TickCount). 취소에 쓴 우클릭이 바로 메뉴를 열지 않게 한다.</summary>
+        int moveCancelledTick = Environment.TickCount - 100000;
+
         void Key_MoveEnded(DeckKey k, Point screen, bool cancelled)
         {
+            if (cancelled) moveCancelledTick = Environment.TickCount;
             DeckKey target = cancelled ? null : KeyAt(screen);
             StopEdge();
             moveKey = null;
@@ -966,10 +1064,21 @@ namespace WinDeck
         }
 
         DeckKey menuKey;
+        /// <summary>우클릭 메뉴를 열었을 때 보이던 페이지. 메뉴와 확인 창이 떠 있는 사이 단축키로 페이지가 바뀌어도 이 페이지의 버튼을 고친다.</summary>
+        string menuPageId;
 
         DeckKey MenuKey
         {
             get { return menuKey; }
+        }
+
+        /// <summary>질문 창 (예/아니요). 떠 있는 동안에는 뒤에서 설정을 다시 읽거나 사이트 아이콘을 넣지 않는다.</summary>
+        DialogResult Ask(string text, MessageBoxButtons buttons)
+        {
+            bool mine = !dialogOpen;
+            if (mine) dialogOpen = true;
+            try { return MessageBox.Show(this, text, "WinDeck", buttons, MessageBoxIcon.Question); }
+            finally { if (mine) dialogOpen = false; }
         }
 
         ContextMenuStrip BuildPanelMenu()
@@ -987,35 +1096,62 @@ namespace WinDeck
             return m;
         }
 
+        /// <summary>id 로 페이지를 찾는다. 그 사이 지워졌으면 null.</summary>
+        DeckPage PageById(string pageId)
+        {
+            return cfg.Pages.Find(p => p.Id == pageId);
+        }
+
         void PasteInto(DeckKey k)
         {
             if (k == null || copiedButton == null) return;
-            if (!ConfirmReplace(k.Data, "붙여넣은 버튼")) return;
+            PasteInto(menuPageId ?? CurrentPage.Id, k.Index);
+        }
+
+        /// <summary>복사해 둔 버튼을 그 페이지의 그 칸에 넣는다 (확인 창이 떠 있는 사이 페이지가 바뀌어도 처음 그 페이지에).</summary>
+        public bool PasteInto(string pageId, int index)
+        {
+            DeckPage page = PageById(pageId);
+            if (page == null || copiedButton == null) return false;
+            if (!ConfirmReplace(page.Buttons[index], "붙여넣은 버튼")) return false;
             SyncFromDisk();
+            page = PageById(pageId);
+            if (page == null) return false;
             DeckButton pasted = copiedButton.Clone();
             pasted.Hotkey = ""; // 같은 단축키가 두 버튼에 걸리지 않도록 복사본에는 단축키를 넣지 않는다
-            CurrentPage.Buttons[k.Index] = pasted;
+            page.Buttons[index] = pasted;
             ConfigChanged();
-            k.Flash(Theme.Accent);
+            if (CurrentPage == page) keys[index].Flash(Theme.Accent);
+            return true;
         }
 
         void ClearKey(DeckKey k)
         {
-            if (k == null || k.Data == null || k.Data.IsEmpty) return;
-            string name = string.IsNullOrWhiteSpace(k.Data.Title) ? "이" : "'" + k.Data.Title + "'";
-            if (MessageBox.Show(this, name + " 버튼을 비울까요?", "WinDeck", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-                return;
+            if (k == null) return;
+            ClearKey(menuPageId ?? CurrentPage.Id, k.Index);
+        }
+
+        /// <summary>그 페이지의 그 칸을 비운다 (확인 창이 떠 있는 사이 페이지가 바뀌어도 처음 그 페이지의 버튼을).</summary>
+        public bool ClearKey(string pageId, int index)
+        {
+            DeckPage page = PageById(pageId);
+            if (page == null || page.Buttons[index] == null || page.Buttons[index].IsEmpty) return false;
+            string title = page.Buttons[index].Title;
+            string name = string.IsNullOrWhiteSpace(title) ? "이" : "'" + title + "'";
+            if (Ask(name + " 버튼을 비울까요?", MessageBoxButtons.YesNo) != DialogResult.Yes) return false;
             SyncFromDisk();
-            CurrentPage.Buttons[k.Index] = new DeckButton();
+            page = PageById(pageId);
+            if (page == null) return false;
+            page.Buttons[index] = new DeckButton();
             ConfigChanged();
+            return true;
         }
 
         bool ConfirmReplace(DeckButton existing, string what)
         {
             if (existing == null || existing.IsEmpty) return true;
             string name = string.IsNullOrWhiteSpace(existing.Title) ? "기존" : "'" + existing.Title + "'";
-            return MessageBox.Show(this, name + " 버튼을 " + what + "(으)로 바꿀까요?", "WinDeck",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+            return Ask(name + " 버튼을 " + what + "(으)로 바꿀까요?", MessageBoxButtons.YesNo) == DialogResult.Yes;
         }
 
         // ------------------------------------------------------------------ drag & drop onto a key
@@ -1045,12 +1181,13 @@ namespace WinDeck
             }
             var files = e.Data.GetData(DataFormats.FileDrop) as string[];
             string json = files != null && files.Length == 1 && files[0].EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? files[0] : null;
+            string dropPageId = CurrentPage.Id; // 놓은 그때 보이던 페이지 (확인 창이 떠 있는 사이 페이지가 바뀌어도 여기에 만든다)
             // 끌어온 프로그램이 응답을 기다리지 않도록 확인 창은 드롭이 끝난 뒤에 띄운다.
             BeginInvoke(new Action(delegate
             {
                 try
                 {
-                    if (PlaceDroppedButton(k, b, json) && icon != null) icon.Placed = true;
+                    if (PlaceDroppedButton(k, b, json, dropPageId) && icon != null) icon.Placed = true;
                 }
                 finally
                 {
@@ -1064,14 +1201,14 @@ namespace WinDeck
         }
 
         /// <summary>끌어 놓은 것으로 버튼을 만든다 (설정 파일이면 불러오기를 권함, 이름 묻기). 버튼을 만들었으면 true.</summary>
-        bool PlaceDroppedButton(DeckKey k, DeckButton b, string json)
+        bool PlaceDroppedButton(DeckKey k, DeckButton b, string json, string pageId)
         {
             // 받은 설정 파일(.json)을 패널에 끌어놓으면 버튼 대신 설정 불러오기를 권한다.
             if (json != null && ConfigStore.LooksLikeConfigFile(json))
             {
-                DialogResult r = MessageBox.Show(this, "'" + Path.GetFileName(json) + "' 은(는) WinDeck 설정 파일입니다.\n\n"
+                DialogResult r = Ask("'" + Path.GetFileName(json) + "' 은(는) WinDeck 설정 파일입니다.\n\n"
                     + "[예]  이 설정 불러오기 (지금 설정은 자동으로 백업)\n[아니요]  이 파일을 여는 버튼 만들기",
-                    "WinDeck", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                    MessageBoxButtons.YesNoCancel);
                 if (r == DialogResult.Yes)
                 {
                     ImportFile(json, false);
@@ -1079,8 +1216,9 @@ namespace WinDeck
                 }
                 if (r != DialogResult.No) return false;
             }
-            if (!ConfirmReplace(k.Data, "'" + b.Title + "'")) return false;
-            string pageId = CurrentPage.Id;
+            DeckPage dropPage = PageById(pageId);
+            if (dropPage == null) return false;
+            if (!ConfirmReplace(dropPage.Buttons[k.Index], "'" + b.Title + "'")) return false;
             string name = AskDroppedButtonName(b);
             if (name == null) return false; // [취소]: 버튼을 만들지 않는다
             b.Title = name;
@@ -1310,7 +1448,7 @@ namespace WinDeck
             if (c == this)
                 return new TipContent
                 {
-                    Title = CurrentPage.Name,
+                    Title = CurrentPage.Name + "  (" + (cfg.CurrentPage + 1) + "/" + cfg.Pages.Count + ")",
                     Body = string.IsNullOrWhiteSpace(CurrentPage.Hotkey) ? null : "이 페이지 바로가기 · " + CurrentPage.Hotkey,
                     Detail = "끌어서 이동 · 휠: 페이지 넘기기 · 우클릭: 메뉴"
                 };
@@ -1445,7 +1583,12 @@ namespace WinDeck
         public void OnHotkey(HotkeyEntry entry)
         {
             // Alt·Win 을 누른 채로 단축키를 쓰면, 키를 뗄 때 앞 창의 메뉴나 시작 메뉴가 열린다. 빈 키 입력으로 막는다.
-            if (InputSender.AltOrWinDown()) InputSender.SendMaskKey();
+            // 관리자 권한 창이 앞에 있으면 키 입력을 보낼 수 없다. 그래도 단축키 동작(페이지 넘기기 등)은 계속한다.
+            if (InputSender.AltOrWinDown())
+            {
+                try { InputSender.SendMaskKey(); }
+                catch (ActionException) { }
+            }
             switch (entry.Kind)
             {
                 case HotkeyKind.TogglePanel:
@@ -1990,8 +2133,12 @@ namespace WinDeck
             if (trayUpdateItem == null) return;
             bool has = pendingUpdate != null;
             trayUpdateItem.Text = has ? "새 버전 v" + pendingUpdate.Version + " 설치…" : "업데이트 확인…";
-            trayUpdateItem.Font = new Font(trayMenu.Font, has ? FontStyle.Bold : FontStyle.Regular);
+            // 굵은 글꼴은 한 번만 만들어 다시 쓴다 (확인할 때마다 새로 만들면 닫지 않은 글꼴이 쌓인다).
+            if (trayBoldFont == null) trayBoldFont = new Font(trayMenu.Font, FontStyle.Bold);
+            trayUpdateItem.Font = has ? trayBoldFont : trayMenu.Font;
         }
+
+        Font trayBoldFont;
 
         void ShowUpdateDialog(UpdateInfo info)
         {

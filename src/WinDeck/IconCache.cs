@@ -60,15 +60,45 @@ namespace WinDeck
             return img;
         }
 
+        /// <summary>대상 글자(버튼에 적힌 그대로) → 찾은 아이콘과 찾은 때. 못 찾은 결과(Image == null)도 잠시 기억한다.</summary>
+        class ShellEntry
+        {
+            public Image Image;
+            public int Tick;
+        }
+
+        static readonly Dictionary<string, ShellEntry> targetCache = new Dictionary<string, ShellEntry>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>못 찾은 대상을 다시 찾아볼 때까지의 시간 (ms). 프로그램을 설치하거나 드라이브를 연결하면 이 시간 뒤에 아이콘이 나타난다.</summary>
+        const int MissRetryMs = 15000;
+
+        /// <summary>
+        /// 실행 파일의 아이콘. 버튼을 그릴 때마다 불리므로, 파일이 있는지 매번 디스크·네트워크에 묻지 않고 결과를 기억한다
+        /// (끊긴 네트워크 드라이브의 프로그램 버튼이 있으면 그릴 때마다 패널이 멈췄다).
+        /// </summary>
         public static Image ShellIcon(string target)
         {
+            string key = (target ?? "").Trim();
+            if (key.Length == 0) return null;
+            ShellEntry e;
+            int now = Environment.TickCount;
+            if (targetCache.TryGetValue(key, out e) && (e.Image != null || unchecked(now - e.Tick) < MissRetryMs)) return e.Image;
+
+            Image img = null;
             string path = ResolvePath(target);
-            if (path == null) return null;
-            Image img;
-            if (shellCache.TryGetValue(path, out img)) return img;
-            img = LoadShellIcon(path);
-            if (img != null) shellCache[path] = img;
+            if (path != null && !shellCache.TryGetValue(path, out img))
+            {
+                img = LoadShellIcon(path);
+                if (img != null) shellCache[path] = img;
+            }
+            if (targetCache.Count > 500) targetCache.Clear();
+            targetCache[key] = new ShellEntry { Image = img, Tick = now };
             return img;
+        }
+
+        /// <summary>실행 파일 아이콘 기억을 비운다 (설정이 바뀐 뒤: 고친 경로의 아이콘이 바로 보이게).</summary>
+        public static void ForgetShellIcons()
+        {
+            targetCache.Clear();
         }
 
         /// <summary>"notepad.exe" 같은 이름만 있는 경로도 실제 파일 위치를 찾아본다.</summary>
@@ -178,7 +208,10 @@ namespace WinDeck
             {
                 using (FileStream fs = File.OpenRead(file))
                 using (Image im = Image.FromStream(fs))
+                {
+                    PanelBackgroundRenderer.ApplyOrientation(im); // 세로로 찍은 사진이 눕지 않게
                     src = new Bitmap(im);
+                }
             }
 
             using (src) return ToIconData(src);

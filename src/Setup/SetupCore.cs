@@ -168,12 +168,17 @@ namespace WinDeck.Setup
             CloseRunning();
 
             status("파일 복사 중…");
+            RequireSafeFolder(dir);
             bool ours = InstallInfo.IsOurInstallDir(dir);
             Directory.CreateDirectory(dir);
             WriteMarker(dir, version); // 먼저 표식을 남겨, 도중에 멈춰도 제거 프로그램이 지울 수 있게 한다
-            if (ours && Directory.Exists(appDir)) Retry(() => Directory.Delete(appDir, true)); // 지난 버전의 남은 파일 정리
-            CopyTree(sourceAppDir, appDir);
-            Retry(() => File.Copy(uninstallerSource, Path.Combine(dir, InstallInfo.UninstallerExe), true));
+            if (InstallInfo.SamePath(sourceAppDir, appDir))
+                Log("the package is in the install folder: its files are already in place"); // 꾸러미를 설치 폴더에 풀고 실행한 경우
+            else
+                ReplaceAppFiles(sourceAppDir, appDir, ours);
+            string uninstaller = Path.Combine(dir, InstallInfo.UninstallerExe);
+            if (!InstallInfo.SamePath(uninstallerSource, uninstaller))
+                Retry(() => File.Copy(uninstallerSource, uninstaller, true));
             RemoveInnoLeftovers();
 
             status("바로가기 만드는 중…");
@@ -212,6 +217,165 @@ namespace WinDeck.Setup
                 string dest = Path.Combine(to, f.Substring(from.Length).TrimStart('\\'));
                 Retry(() => File.Copy(f, dest, true));
             }
+        }
+
+        /// <summary>새 구동 파일을 잠시 모아 두는 폴더 (설치 폴더 안의 app.new). 설치가 끝나면 지운다.</summary>
+        public const string StagingFolder = InstallInfo.AppFolder + ".new";
+
+        /// <summary>
+        /// 구동 파일(app\)을 새 것으로 바꾼다.
+        ///   1) 새 파일을 먼저 app.new 에 모두 복사한다. 여기서 실패하면(디스크 부족, 읽지 못하는 꾸러미) 쓰던 파일은 그대로다.
+        ///   2) 파일을 하나씩 app\ 로 옮긴다. WinDeck.exe 를 가장 먼저 옮기므로, 그것을 바꾸지 못하면 아무것도 바뀌지 않는다.
+        ///   3) removeStale 이면 새 버전에 없는 옛 파일을 지운다.
+        /// app 폴더 자체는 지우거나 이름을 바꾸지 않는다. WinDeck 버튼으로 연 다른 프로그램이 이 폴더를 작업 폴더로
+        /// 잡고 있으면 폴더는 지울 수 없지만(안의 파일만 지워지고 실패한다), 안의 파일은 바꿀 수 있다.
+        /// </summary>
+        static void ReplaceAppFiles(string source, string appDir, bool removeStale)
+        {
+            string staging = Path.Combine(Path.GetDirectoryName(appDir), StagingFolder);
+            if (Directory.Exists(staging)) Retry(() => DeleteTree(staging)); // 지난 설치가 도중에 멈춰 남긴 것
+            try
+            {
+                CopyTree(source, staging);
+                var names = new List<string>();
+                foreach (string f in FilesUnder(staging)) names.Add(f.Substring(staging.Length).TrimStart('\\'));
+                names.Sort((a, b) =>
+                {
+                    bool ea = string.Equals(a, InstallInfo.AppExe, StringComparison.OrdinalIgnoreCase);
+                    bool eb = string.Equals(b, InstallInfo.AppExe, StringComparison.OrdinalIgnoreCase);
+                    return ea != eb ? (ea ? -1 : 1) : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+                });
+                Directory.CreateDirectory(appDir);
+                foreach (string name in names)
+                {
+                    string from = Path.Combine(staging, name), to = Path.Combine(appDir, name);
+                    Directory.CreateDirectory(Path.GetDirectoryName(to));
+                    Retry(() =>
+                    {
+                        if (File.Exists(to))
+                        {
+                            File.SetAttributes(to, FileAttributes.Normal);
+                            File.Delete(to);
+                        }
+                        File.Move(from, to);
+                    });
+                }
+                if (removeStale) RemoveStaleFiles(appDir, names);
+            }
+            finally
+            {
+                try { DeleteTree(staging); }
+                catch (Exception ex) { Log("could not delete " + staging + ": " + ex.Message); }
+            }
+        }
+
+        /// <summary>지난 버전이 남긴 파일(새 버전에 없는 것)과 빈 하위 폴더를 지운다. 못 지운 것은 기록만 한다.</summary>
+        static void RemoveStaleFiles(string appDir, List<string> keep)
+        {
+            var wanted = new HashSet<string>(keep, StringComparer.OrdinalIgnoreCase);
+            foreach (string f in FilesUnder(appDir))
+            {
+                if (wanted.Contains(f.Substring(appDir.Length).TrimStart('\\'))) continue;
+                try
+                {
+                    File.SetAttributes(f, FileAttributes.Normal);
+                    File.Delete(f);
+                }
+                catch (Exception ex) { Log("could not delete old file " + f + ": " + ex.Message); }
+            }
+            RemoveEmptyFolders(appDir, false);
+        }
+
+        /// <summary>dir 아래의 모든 파일 (전체 경로). 접합점·심볼릭 링크 폴더 안으로는 들어가지 않는다.</summary>
+        static List<string> FilesUnder(string dir)
+        {
+            var list = new List<string>();
+            if (!Directory.Exists(dir)) return list;
+            var pending = new Stack<string>();
+            pending.Push(dir);
+            while (pending.Count > 0)
+            {
+                string d = pending.Pop();
+                list.AddRange(Directory.GetFiles(d));
+                foreach (string sub in Directory.GetDirectories(d))
+                    if (!IsLink(sub)) pending.Push(sub);
+            }
+            return list;
+        }
+
+        static bool IsLink(string dir)
+        {
+            return (File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0;
+        }
+
+        /// <summary>
+        /// 폴더와 그 안의 것을 모두 지운다. 접합점·심볼릭 링크는 링크만 지우고, 가리키는 곳의 파일은 건드리지 않는다.
+        /// </summary>
+        static void DeleteTree(string dir)
+        {
+            if (!Directory.Exists(dir)) return;
+            if (IsLink(dir))
+            {
+                Directory.Delete(dir);
+                return;
+            }
+            foreach (string f in Directory.GetFiles(dir))
+            {
+                File.SetAttributes(f, FileAttributes.Normal);
+                File.Delete(f);
+            }
+            foreach (string sub in Directory.GetDirectories(dir)) DeleteTree(sub);
+            Directory.Delete(dir);
+        }
+
+        /// <summary>
+        /// 빈 하위 폴더를 아래쪽부터 지운다. includeSelf 면 dir 도 비었을 때 지운다.
+        /// 비지 않았거나 다른 프로그램이 잡고 있어 못 지운 폴더는 그대로 둔다. dir 까지 모두 지웠으면 true.
+        /// </summary>
+        static bool RemoveEmptyFolders(string dir, bool includeSelf)
+        {
+            if (!Directory.Exists(dir)) return true;
+            bool empty = true;
+            foreach (string sub in Directory.GetDirectories(dir))
+            {
+                if (IsLink(sub))
+                {
+                    try { Directory.Delete(sub); }
+                    catch (Exception) { empty = false; }
+                }
+                else if (!RemoveEmptyFolders(sub, true)) empty = false;
+            }
+            if (!includeSelf) return false;
+            if (!empty || Directory.GetFiles(dir).Length > 0) return false;
+            try
+            {
+                Directory.Delete(dir);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 파일을 지우거나 바꿀 폴더가 올바른 모양인지 확인한다: 전체 경로이고 드라이브 뿌리가 아니어야 한다.
+        /// (Windows 가 사용자 폴더를 알려 주지 못하면 경로가 비거나 상대 경로가 된다. 그런 경로는 건드리지 않는다.)
+        /// </summary>
+        static void RequireSafeFolder(string path)
+        {
+            bool ok = false;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(path) && Path.IsPathRooted(path))
+                {
+                    string full = Path.GetFullPath(path).TrimEnd('\\');
+                    string root = (Path.GetPathRoot(full) ?? "").TrimEnd('\\');
+                    ok = full.Length > root.Length + 1 && full.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch (Exception) { }
+            if (!ok) throw new SetupException("폴더 경로가 올바르지 않아 작업을 멈췄습니다: '" + path + "'");
         }
 
         /// <summary>백신·탐색기가 파일을 잠깐 잡고 있을 때를 위해 몇 번 다시 시도한다.</summary>
@@ -261,11 +425,24 @@ namespace WinDeck.Setup
             try
             {
                 using (RegistryKey k = Registry.CurrentUser.OpenSubKey(InstallInfo.UninstallParentKey, true))
-                    if (k != null && k.OpenSubKey(InstallInfo.InnoUninstallKey) != null)
+                {
+                    // 1.3 이하를 다른 폴더에 설치해 쓰던 경우: 그 등록 정보는 남겨 둔다 ('설치된 앱'에서 옛 설치를 제거할 수 있게).
+                    string where = null;
+                    bool found = false;
+                    if (k != null)
+                        using (RegistryKey inno = k.OpenSubKey(InstallInfo.InnoUninstallKey, false))
+                            if (inno != null)
+                            {
+                                found = true;
+                                where = (inno.GetValue("Inno Setup: App Path") as string) ?? (inno.GetValue("InstallLocation") as string);
+                            }
+                    if (found && (string.IsNullOrWhiteSpace(where) || InstallInfo.SamePath(where, dir)))
                     {
                         k.DeleteSubKeyTree(InstallInfo.InnoUninstallKey, false);
                         had = true;
                     }
+                    else if (found) Log("kept the 1.3 uninstall entry: that copy is installed elsewhere (" + where + ")");
+                }
             }
             catch (Exception ex) { Log("could not delete Inno key: " + ex.Message); }
             if (had) Log("removed 1.3 (Inno Setup) install leftovers");
@@ -309,18 +486,56 @@ namespace WinDeck.Setup
         /// <summary>설치한 WinDeck 을 켠다 (설치 프로그램이 끝나도 계속 실행).</summary>
         public static void LaunchInstalled()
         {
-            string exe = InstallInfo.InstalledExe;
-            Log("launch " + exe);
-            Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = InstallInfo.InstalledAppDir });
+            Launch(InstallInfo.InstalledExe, null);
+        }
+
+        /// <summary>
+        /// WinDeck 을 켠다. 작업 폴더는 설치 폴더가 아니라 사용자 폴더로 둔다
+        /// (WinDeck 과 WinDeck 이 여는 프로그램이 app 폴더를 잡고 있지 않게).
+        /// </summary>
+        static void Launch(string exe, string args)
+        {
+            Log("launch " + exe + (args == null ? "" : " " + args));
+            var psi = new ProcessStartInfo(exe) { UseShellExecute = false };
+            if (args != null) psi.Arguments = args;
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            psi.WorkingDirectory = !string.IsNullOrEmpty(home) && Directory.Exists(home) ? home : Path.GetDirectoryName(exe);
+            Process.Start(psi);
+        }
+
+        /// <summary>
+        /// 자동 업데이트가 실패했을 때: 쓰던 WinDeck 을 다시 켠다 (그대로 두면 WinDeck 이 말없이 꺼진 채로 남는다).
+        /// --update-failed 를 받은 WinDeck(1.6.1 이상)은 업데이트 실패를 트레이 알림으로 알린다. 그 전 버전은 이 인자를 무시한다.
+        /// 켰으면 true.
+        /// </summary>
+        public static bool RelaunchAfterFailure()
+        {
+            try
+            {
+                string exe = InstallInfo.InstalledExe;
+                // 1.3 이하 설치는 구동 파일이 설치 폴더 바로 아래에 있다.
+                if (!File.Exists(exe)) exe = Path.Combine(InstallInfo.InstallDir, InstallInfo.AppExe);
+                if (!File.Exists(exe)) return false;
+                Launch(exe, "--update-failed");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("could not start WinDeck again: " + ex.Message);
+                return false;
+            }
         }
 
         // ------------------------------------------------------------------ 제거
 
         /// <summary>
         /// 설치한 WinDeck 을 지운다. 표식 파일과 정해진 설치 경로가 모두 맞지 않으면 아무것도 지우지 않고 SetupException.
+        /// 설치가 만든 것만 지운다: app\ 안의 파일, 'WinDeck 제거.exe', 표식 파일, 바로가기, 등록 정보.
+        /// 설치 폴더에 다른 파일이 있으면 그 파일과 폴더는 남긴다.
         /// deleteSettings 가 true 면 버튼 설정(%APPDATA%\WinDeck)과 WinDeck 레지스트리 키도 지운다.
+        /// 돌려주는 값: 지우지 못하고 남긴 설치 폴더 (다른 파일이 있거나 다른 프로그램이 폴더를 잡고 있을 때). 모두 지웠으면 null.
         /// </summary>
-        public static void Uninstall(bool deleteSettings, Action<string> status)
+        public static string Uninstall(bool deleteSettings, Action<string> status)
         {
             string dir = InstallInfo.InstallDir;
             if (!InstallInfo.IsOurInstallDir(dir))
@@ -337,6 +552,23 @@ namespace WinDeck.Setup
             status("실행 중인 WinDeck 을 끝내는 중…");
             CloseRunning();
 
+            status("파일 지우는 중…");
+            // 표식과 경로를 지우기 직전에 한 번 더 확인한다.
+            if (!InstallInfo.IsOurInstallDir(dir)) throw new SetupException("설치 표식이 바뀌어 폴더를 지우지 않았습니다.\n" + dir);
+            RequireSafeFolder(dir);
+            // 구동 파일을 먼저 지운다. 여기서 멈추면 바로가기와 등록 정보는 그대로라서 '설치된 앱'에서 다시 제거할 수 있다.
+            // WinDeck.exe 는 맨 나중에 지운다 (설치 폴더의 제거 프로그램은 app\WinDeck.exe 가 있어야 실행된다).
+            string appDir = InstallInfo.InstalledAppDir, exe = InstallInfo.InstalledExe;
+            string staging = Path.Combine(dir, StagingFolder);
+            if (Directory.Exists(staging)) Retry(() => DeleteTree(staging));
+            foreach (string f in FilesUnder(appDir))
+            {
+                if (InstallInfo.SamePath(f, exe)) continue;
+                string file = f;
+                Retry(() => DeleteFile(file));
+            }
+            Retry(() => DeleteFile(exe));
+
             status("바로가기와 등록 정보 지우는 중…");
             RemoveOurShortcut(InstallInfo.StartMenuShortcut);
             RemoveOurShortcut(InstallInfo.DesktopShortcut);
@@ -345,29 +577,49 @@ namespace WinDeck.Setup
             try
             {
                 using (RegistryKey k = Registry.CurrentUser.OpenSubKey(InstallInfo.UninstallParentKey, true))
-                    if (k != null && k.OpenSubKey(InstallInfo.AppName) != null) k.DeleteSubKeyTree(InstallInfo.AppName, false);
+                    if (k != null) k.DeleteSubKeyTree(InstallInfo.AppName, false);
             }
             catch (Exception ex) { Log("could not delete uninstall key: " + ex.Message); }
 
-            status("파일 지우는 중…");
-            // 표식과 경로를 지우기 직전에 한 번 더 확인한다.
-            if (!InstallInfo.IsOurInstallDir(dir)) throw new SetupException("설치 표식이 바뀌어 폴더를 지우지 않았습니다.\n" + dir);
-            Retry(() =>
+            // 제거 프로그램, 표식, 빈 폴더. 설치가 만들지 않은 파일이 있으면 그 파일과 폴더는 남긴다.
+            Retry(() => DeleteFile(Path.Combine(dir, InstallInfo.UninstallerExe)));
+            Retry(() => DeleteFile(Path.Combine(dir, InstallInfo.MarkerFile)));
+            string left = null;
+            bool gone = RemoveEmptyFolders(dir, true);
+            // 파일이 하나도 없는데 폴더가 남았으면 다른 프로그램이 잠깐 잡고 있는 것일 수 있다: 조금 기다리며 다시 시도한다.
+            for (int attempt = 1; !gone && attempt < 8 && FilesUnder(dir).Count == 0; attempt++)
             {
-                foreach (string f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
-                    File.SetAttributes(f, FileAttributes.Normal);
-                Directory.Delete(dir, true);
-            });
+                Thread.Sleep(250);
+                gone = RemoveEmptyFolders(dir, true);
+            }
+            if (Directory.Exists(dir))
+            {
+                left = dir;
+                string[] rest = Directory.GetFileSystemEntries(dir);
+                Log("kept " + dir + " (" + (rest.Length == 0 ? "in use by another program" : "not made by setup: " + string.Join(", ", rest.Select(Path.GetFileName).ToArray())) + ")");
+            }
 
             if (deleteSettings)
             {
                 status("버튼 설정 지우는 중…");
                 string settings = InstallInfo.SettingsDir;
-                if (Directory.Exists(settings)) Retry(() => Directory.Delete(settings, true));
+                if (Directory.Exists(settings))
+                {
+                    RequireSafeFolder(settings);
+                    Retry(() => DeleteTree(settings));
+                }
                 try { Registry.CurrentUser.DeleteSubKeyTree(AppInstance.RegistryKey, false); }
                 catch (Exception) { }
             }
             Log("uninstall done");
+            return left;
+        }
+
+        static void DeleteFile(string file)
+        {
+            if (!File.Exists(file)) return;
+            File.SetAttributes(file, FileAttributes.Normal);
+            File.Delete(file);
         }
 
         // ------------------------------------------------------------------ 바로가기 (.lnk)

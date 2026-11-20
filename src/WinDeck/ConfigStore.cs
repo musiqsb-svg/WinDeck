@@ -176,11 +176,28 @@ namespace WinDeck
                 catch (Exception ex)
                 {
                     string broken = ConfigPath + ".broken-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
-                    try { File.Copy(ConfigPath, broken, true); }
+                    bool kept = false;
+                    try
+                    {
+                        File.Copy(ConfigPath, broken, true);
+                        kept = true;
+                    }
                     catch (Exception) { }
+                    if (!kept)
+                    {
+                        // 옆에 보관하지 못했으면 백업 폴더에라도 남긴다 (아래에서 기본 설정으로 덮어쓰기 전에).
+                        try
+                        {
+                            broken = BackupFile(ConfigPath, "broken");
+                            kept = true;
+                        }
+                        catch (Exception) { }
+                    }
                     if (data != null) Remember(data, new FileInfo(ConfigPath));
-                    LoadWarning = "설정 파일을 읽지 못해 기본 설정으로 시작합니다.\n기존 파일은 다음 위치에 보관했습니다:\n"
-                        + broken + "\n\n(" + ex.Message + ")";
+                    LoadWarning = "설정 파일을 읽지 못해 기본 설정으로 시작합니다.\n"
+                        + (kept ? "기존 파일은 다음 위치에 보관했습니다:\n" + broken : "기존 파일은 보관하지 못했습니다.")
+                        + "\n\n설정 → 백업 에서 이전 상태로 되돌릴 수 있습니다."
+                        + "\n\n(" + ex.Message + ")";
                 }
             }
             else
@@ -664,6 +681,7 @@ namespace WinDeck
                     case "before_reload": return "바뀐 설정 다시 읽기 전";
                     case "before_previous": return "이전 설정 가져오기 전";
                     case "external_change": return "다른 곳에서 바뀐 파일";
+                    case "broken": return "읽지 못한 설정 파일";
                     case "daily": return "하루 자동 백업";
                     case "manual": return "직접 백업";
                 }

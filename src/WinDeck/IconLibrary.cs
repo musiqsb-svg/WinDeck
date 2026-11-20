@@ -229,6 +229,7 @@ namespace WinDeck
             btnOk.Click += delegate { Accept(); };
             Controls.Add(btnOk);
             Controls.Add(cancel);
+            AcceptButton = btnOk; // Enter = 고른 아이콘으로 확인
             CancelButton = cancel;
 
             cboCategory.SelectedIndexChanged += delegate { ApplyFilter(); };

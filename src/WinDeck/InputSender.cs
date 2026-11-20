@@ -96,9 +96,22 @@ namespace WinDeck
         {
             for (int i = 0; i < sequence.Count; i++)
             {
-                SendCombo(sequence[i]);
+                if (IsLockCombo(sequence[i]))
+                {
+                    if (!Native.LockWorkStation()) throw new ActionException("화면을 잠그지 못했습니다.");
+                }
+                else SendCombo(sequence[i]);
                 if (i < sequence.Count - 1) Thread.Sleep(60);
             }
+        }
+
+        /// <summary>
+        /// Win+L (화면 잠금)인지. Windows 는 프로그램이 보낸 Win+L 키 입력으로는 화면을 잠그지 않으므로,
+        /// 이 조합은 키를 보내지 않고 잠금 기능을 직접 부른다.
+        /// </summary>
+        public static bool IsLockCombo(KeyCombo combo)
+        {
+            return combo != null && combo.Win && !combo.Ctrl && !combo.Alt && !combo.Shift && combo.Key == 0x4C;
         }
 
         // ---- 붙여넣기 방식 ----
@@ -113,16 +126,23 @@ namespace WinDeck
             if (!restorePending) savedClipboard = BackupClipboard();
             if (!Retry(delegate { Clipboard.SetText(text); }))
                 throw new ActionException("클립보드를 사용할 수 없습니다. 잠시 후 다시 시도하세요.");
-            Thread.Sleep(30);
-            SendCombo(new KeyCombo { Ctrl = true, Key = VK_V });
-            if (pressEnter)
+            try
             {
-                Thread.Sleep(80);
-                var list = new List<Native.INPUT>();
-                AddPress(list, VK_RETURN);
-                Send(list);
+                Thread.Sleep(30);
+                SendCombo(new KeyCombo { Ctrl = true, Key = VK_V });
+                if (pressEnter)
+                {
+                    Thread.Sleep(80);
+                    var list = new List<Native.INPUT>();
+                    AddPress(list, VK_RETURN);
+                    Send(list);
+                }
             }
-            ScheduleRestore();
+            finally
+            {
+                // 키 입력을 보내지 못해도(관리자 권한 창 등) 사용자가 복사해 둔 내용은 되돌린다.
+                ScheduleRestore();
+            }
         }
 
         static void ScheduleRestore()

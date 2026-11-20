@@ -18,6 +18,7 @@ namespace WinDeck
         ///   --exit          실행 중인 WinDeck 을 설정 저장 후 끝낸다 (설치·빌드 스크립트용). 끝나면 0, 시간 초과 1.
         ///   --check-update  실행 중인 WinDeck 에서 업데이트를 바로 확인한다.
         ///   --restart       업데이트 직후 다시 실행: 앞 프로세스가 끝날 때까지 기다렸다가 시작한다.
+        ///   --update-failed 설치 파일이 업데이트에 실패해 쓰던 WinDeck 을 다시 켰다: 트레이 알림으로 알린다.
         /// </summary>
         [STAThread]
         static int Main(string[] args)
@@ -25,6 +26,8 @@ namespace WinDeck
             bool exitCmd = args.Contains("--exit");
             bool checkUpdate = args.Contains("--check-update");
             bool restart = args.Contains("--restart");
+            bool updateFailed = args.Contains("--update-failed");
+            LeaveAppFolder();
 
             if (exitCmd)
             {
@@ -45,7 +48,7 @@ namespace WinDeck
 
                 try
                 {
-                    Run(checkUpdate);
+                    Run(checkUpdate, updateFailed);
                 }
                 finally
                 {
@@ -55,7 +58,23 @@ namespace WinDeck
             return 0;
         }
 
-        static void Run(bool checkUpdate)
+        /// <summary>
+        /// 작업 폴더를 사용자 폴더로 옮긴다. 바로가기와 설치 프로그램은 WinDeck 을 app 폴더에서 켜는데,
+        /// 그대로 두면 버튼으로 연 프로그램(브라우저, 명령 창 등)이 app 폴더를 작업 폴더로 물려받아 잡고 있게 된다.
+        /// Windows 는 누가 작업 폴더로 잡고 있는 폴더를 지우거나 이름을 바꾸지 못하므로, 업데이트와 제거가 막힌다.
+        /// WinDeck 은 구성요소를 실행 파일 위치로 찾으므로 작업 폴더에 기대지 않는다.
+        /// </summary>
+        static void LeaveAppFolder()
+        {
+            try
+            {
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (!string.IsNullOrEmpty(home) && System.IO.Directory.Exists(home)) System.IO.Directory.SetCurrentDirectory(home);
+            }
+            catch (Exception) { }
+        }
+
+        static void Run(bool checkUpdate, bool updateFailed)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -75,6 +94,7 @@ namespace WinDeck
             var exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, AppInstance.ExitEventName);
             var updateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, AppInstance.UpdateEventName);
             var form = new DeckForm(cfg, true);
+            form.UpdateFailedOnStart = updateFailed;
             if (checkUpdate) form.Shown += delegate { form.CheckForUpdatesNow(); };
 
             var listener = new Thread(() =>

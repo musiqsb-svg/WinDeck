@@ -90,7 +90,7 @@ namespace WinDeck
             lnkPage = new LinkLabel { Text = "릴리스 페이지에서 직접 받기", AutoSize = true, Location = new Point(16, 276) };
             lnkPage.LinkClicked += delegate
             {
-                try { Process.Start(new ProcessStartInfo(info.PageUrl ?? Updater.ReleasesPage) { UseShellExecute = true }); }
+                try { Process.Start(new ProcessStartInfo(Updater.PageToOpen(info.PageUrl)) { UseShellExecute = true }); }
                 catch (Exception) { }
             };
             Controls.Add(lnkPage);

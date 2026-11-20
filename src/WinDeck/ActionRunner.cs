@@ -134,24 +134,48 @@ namespace WinDeck
             return path;
         }
 
+        /// <summary>Windows 탐색기의 전체 경로 (이름만으로 부르면 현재 폴더·PATH 의 같은 이름 파일이 대신 실행될 수 있다).</summary>
+        public static string ExplorerPath
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"); }
+        }
+
+        /// <summary>
+        /// 새로 여는 프로그램의 작업 폴더: 사용자 폴더.
+        /// 정하지 않으면 WinDeck 의 작업 폴더를 물려받는데, 그것이 설치 폴더면 그 프로그램이 켜져 있는 동안 업데이트·제거가 막힌다.
+        /// </summary>
+        public static string DefaultWorkingDirectory
+        {
+            get
+            {
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                return !string.IsNullOrEmpty(home) && Directory.Exists(home) ? home : "";
+            }
+        }
+
+        static void StartExplorer(string arguments)
+        {
+            Process.Start(new ProcessStartInfo(ExplorerPath, arguments) { UseShellExecute = false, WorkingDirectory = DefaultWorkingDirectory });
+        }
+
         static void OpenFolder(string target)
         {
             string path = ExpandPath(target);
             if (path.Length == 0) throw new ActionException("폴더 경로가 비어 있습니다.");
             if (path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
             {
-                Process.Start("explorer.exe", path);
+                StartExplorer(path);
                 return;
             }
             if (File.Exists(path))
             {
                 // 파일 경로면 그 파일이 있는 폴더를 열고 파일을 선택해 준다.
-                Process.Start("explorer.exe", "/select,\"" + path + "\"");
+                StartExplorer("/select,\"" + path + "\"");
                 return;
             }
             if (!Directory.Exists(path)) throw new ActionException("폴더를 찾을 수 없습니다.\n" + path);
             if (path.Length > 3) path = path.TrimEnd('\\', '/');
-            Process.Start("explorer.exe", path.Length <= 3 ? path : "\"" + path + "\"");
+            StartExplorer(path.Length <= 3 ? path : "\"" + path + "\"");
         }
 
         static readonly Regex SchemePattern = new Regex(@"^[a-zA-Z][a-zA-Z0-9+.\-]*:(?!\d)", RegexOptions.Compiled);
@@ -170,7 +194,7 @@ namespace WinDeck
             if (url.Length == 0) throw new ActionException("링크 주소가 비어 있습니다.");
             try
             {
-                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true, WorkingDirectory = DefaultWorkingDirectory });
             }
             catch (Win32Exception ex)
             {
@@ -178,12 +202,18 @@ namespace WinDeck
             }
         }
 
+        /// <summary>실행 옵션의 %USERPROFILE% 같은 환경 변수를 실제 값으로 바꾼다 (파일 경로와 같게).</summary>
+        public static string ExpandArgs(string args)
+        {
+            return Environment.ExpandEnvironmentVariables((args ?? "").Trim());
+        }
+
         static void RunFile(string target, string args)
         {
             string path = ExpandPath(target);
             if (path.Length == 0) throw new ActionException("실행할 파일 경로가 비어 있습니다.");
-            var psi = new ProcessStartInfo(path) { UseShellExecute = true };
-            if (!string.IsNullOrWhiteSpace(args)) psi.Arguments = args.Trim();
+            var psi = new ProcessStartInfo(path) { UseShellExecute = true, WorkingDirectory = DefaultWorkingDirectory };
+            if (!string.IsNullOrWhiteSpace(args)) psi.Arguments = ExpandArgs(args);
             if (Path.IsPathRooted(path))
             {
                 if (!File.Exists(path) && !Directory.Exists(path))

@@ -219,8 +219,39 @@ namespace WinDeck
 
         // ------------------------------------------------------------------ 받기·검사
 
+        /// <summary>
+        /// 업데이트에 쓰는 주소는 https 만 받는다 (암호화하지 않은 주소나 이 PC 의 파일 주소는 받지 않는다).
+        /// 점검용 주소(WINDECK_INSTANCE + WINDECK_UPDATE_URL)를 쓸 때만 file:// 도 받는다.
+        /// </summary>
+        public static bool IsAllowedUrl(string url)
+        {
+            Uri u;
+            if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out u)) return false;
+            if (u.Scheme == Uri.UriSchemeHttps) return true;
+            return TestUrl != null && u.Scheme == Uri.UriSchemeFile;
+        }
+
+        /// <summary>
+        /// 업데이트 창의 [릴리스 페이지에서 직접 받기]가 여는 주소. 릴리스 정보에 적힌 주소가 WinDeck 저장소의
+        /// GitHub 페이지일 때만 그 주소를 열고, 아니면 정해 둔 릴리스 페이지를 연다 (다른 주소나 파일을 열지 않게).
+        /// </summary>
+        public static string PageToOpen(string pageUrl)
+        {
+            const string prefix = "https://github.com/" + Repo + "/";
+            return pageUrl != null && pageUrl.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? pageUrl : ReleasesPage;
+        }
+
+        /// <summary>릴리스 정보에 적힌 파일 이름이 폴더를 벗어나지 않는 평범한 이름인지 (예: WinDeck-Setup-1.6.1.exe).</summary>
+        public static bool IsSafeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name.Length > 120) return false;
+            if (name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0) return false;
+            return name != "." && name != ".." && name == System.IO.Path.GetFileName(name);
+        }
+
         static WebRequest NewRequest(string url)
         {
+            if (!IsAllowedUrl(url)) throw new UpdateException("업데이트 주소가 올바르지 않습니다 (https 주소만 받습니다).");
             WebRequest req = WebRequest.Create(url);
             var http = req as HttpWebRequest;
             if (http != null)
@@ -234,17 +265,44 @@ namespace WinDeck
             return req;
         }
 
+        /// <summary>릴리스 정보·검사 목록 같은 글 응답의 최대 크기. 이보다 크면 받지 않는다.</summary>
+        const int MaxTextBytes = 2 * 1024 * 1024;
+
+        /// <summary>주소가 넘어간 끝(최종 주소)도 허용하는 주소인지 확인한다.</summary>
+        static void CheckFinalUrl(WebResponse resp)
+        {
+            if (resp.ResponseUri != null && !IsAllowedUrl(resp.ResponseUri.AbsoluteUri))
+                throw new UpdateException("업데이트 주소가 https 가 아닌 곳으로 넘어가서 받지 않았습니다.");
+        }
+
         public static string GetString(string url)
         {
             using (WebResponse resp = NewRequest(url).GetResponse())
-            using (var reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
-                return reader.ReadToEnd();
+            {
+                CheckFinalUrl(resp);
+                using (Stream s = resp.GetResponseStream())
+                using (var ms = new MemoryStream())
+                {
+                    var buf = new byte[16384];
+                    int n;
+                    while ((n = s.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        ms.Write(buf, 0, n);
+                        if (ms.Length > MaxTextBytes) throw new UpdateException("받은 정보가 너무 큽니다.");
+                    }
+                    // StreamReader 처럼 맨 앞의 UTF-8 표식(BOM)은 뺀다.
+                    byte[] all = ms.ToArray();
+                    int skip = all.Length >= 3 && all[0] == 0xEF && all[1] == 0xBB && all[2] == 0xBF ? 3 : 0;
+                    return Encoding.UTF8.GetString(all, skip, all.Length - skip);
+                }
+            }
         }
 
         public static void Download(string url, string dest, Action<long, long> progress, Func<bool> cancelled)
         {
             using (WebResponse resp = NewRequest(url).GetResponse())
             {
+                CheckFinalUrl(resp);
                 long total = resp.ContentLength;
                 if (total > MaxDownload) throw new UpdateException("받을 파일이 너무 큽니다.");
                 using (Stream src = resp.GetResponseStream())
@@ -299,9 +357,14 @@ namespace WinDeck
             return bytes >= 1024 * 1024 ? (bytes / 1048576.0).ToString("0.0") + "MB" : (bytes / 1024) + "KB";
         }
 
+        /// <summary>받은 설치 파일을 두는 임시 폴더. 점검용 실행은 따로 써서, 사용자가 쓰는 WinDeck 이 받아 둔 파일과 섞이지 않는다.</summary>
         static string WorkDir
         {
-            get { return System.IO.Path.Combine(System.IO.Path.GetTempPath(), "WinDeck-update"); }
+            get
+            {
+                return System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                    AppInstance.IsTest ? "WinDeck-update-" + AppInstance.TestId : "WinDeck-update");
+            }
         }
 
         /// <summary>
@@ -315,6 +378,11 @@ namespace WinDeck
             string name = info.SetupName;
             if (url == null) throw new UpdateException("릴리스에서 설치 파일을 찾지 못했습니다.");
             if (info.ChecksumUrl == null) throw new UpdateException("릴리스에 검사용 SHA-256 목록이 없어 자동으로 설치할 수 없습니다.");
+            // 주소와 이름은 디스크를 건드리기 전에 확인한다.
+            if (!IsAllowedUrl(url) || !IsAllowedUrl(info.ChecksumUrl))
+                throw new UpdateException("업데이트 주소가 올바르지 않습니다 (https 주소만 받습니다).");
+            if (!IsSafeFileName(name) || VersionFromTag(info.Version) != info.Version)
+                throw new UpdateException("릴리스 정보의 파일 이름이나 버전이 올바르지 않아 설치하지 않습니다.");
 
             string work = System.IO.Path.Combine(WorkDir, info.Version);
             if (Directory.Exists(work)) Directory.Delete(work, true);

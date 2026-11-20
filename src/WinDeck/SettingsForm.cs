@@ -215,7 +215,14 @@ namespace WinDeck
             btnBackupNow.Click += delegate { BackupNow(); };
             btnFolder.Click += delegate
             {
-                try { Process.Start("explorer.exe", "\"" + ConfigStore.Dir + "\""); }
+                try
+                {
+                    Process.Start(new ProcessStartInfo(ActionRunner.ExplorerPath, "\"" + ConfigStore.Dir + "\"")
+                    {
+                        UseShellExecute = false,
+                        WorkingDirectory = ActionRunner.DefaultWorkingDirectory
+                    });
+                }
                 catch (Exception) { }
             };
             tabBackup.Controls.Add(btnRestore);
@@ -508,7 +515,7 @@ namespace WinDeck
 
         bool PickBgImage()
         {
-            using (var ofd = new OpenFileDialog())
+            using (var ofd = new OpenFileDialog { RestoreDirectory = true }) // 고른 폴더가 WinDeck 의 작업 폴더로 남지 않게
             {
                 ofd.Title = (EditingVertical ? "세로" : "가로") + " 배치 배경 이미지 선택";
                 ofd.Filter = "이미지 (*.png;*.jpg;*.jpeg;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.gif|모든 파일 (*.*)|*.*";
@@ -871,7 +878,7 @@ namespace WinDeck
             float ph = pad + bar + rows * key + (rows - 1) * gap + pad;
             float s = Math.Min((Width - 4) / pw, (Height - 4) / ph);
             var panel = new Rectangle((int)((Width - pw * s) / 2), (int)((Height - ph * s) / 2), (int)(pw * s), (int)(ph * s));
-            PanelBackgroundRenderer.Paint(g, panel, Background, (int)((pad + bar) * s));
+            PanelBackgroundRenderer.Paint(g, panel, Background, (int)((pad + bar) * s), DecodedImage());
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             using (var keyBrush = new SolidBrush(Color.FromArgb(235, Theme.KeyBack)))
                 for (int i = 0; i < cols * rows; i++)
@@ -881,6 +888,33 @@ namespace WinDeck
                     using (var path = Theme.RoundRect(kr, key * s * 0.18f)) g.FillPath(keyBrush, path);
                 }
             using (var pen = new Pen(Theme.PanelBorder)) g.DrawRectangle(pen, panel);
+        }
+
+        // 풀어 둔 배경 이미지. 어둡기 막대를 끌 때처럼 같은 이미지를 여러 번 그릴 때 매번 다시 풀지 않는다.
+        string decodedData;
+        Image decoded;
+
+        Image DecodedImage()
+        {
+            string data = PanelBackgroundRenderer.HasImage(Background) ? Background.ImageData : null;
+            if (!ReferenceEquals(data, decodedData) && data != decodedData)
+            {
+                if (decoded != null) decoded.Dispose();
+                decoded = PanelBackgroundRenderer.DecodeImage(data);
+                decodedData = data;
+            }
+            return decoded;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && decoded != null)
+            {
+                decoded.Dispose();
+                decoded = null;
+                decodedData = null;
+            }
+            base.Dispose(disposing);
         }
     }
 
@@ -992,6 +1026,7 @@ namespace WinDeck
             ok.Click += delegate { Accept(); };
             Controls.Add(ok);
             Controls.Add(cancel);
+            AcceptButton = ok; // Enter = 확인 (키를 받는 중에는 입력란이 Enter 를 먼저 받는다)
             CancelButton = cancel;
 
             AutoScaleDimensions = new SizeF(96F, 96F);

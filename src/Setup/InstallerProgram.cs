@@ -84,6 +84,8 @@ namespace WinDeck.Setup
             catch (Exception ex)
             {
                 SetupCore.Log("install failed: " + ex);
+                // 자동 업데이트(창 없이, /RELAUNCH=1)가 실패하면 쓰던 WinDeck 을 다시 켠다.
+                if (silent && relaunch) SetupCore.RelaunchAfterFailure();
                 if (!noBoxes)
                     MessageBox.Show("설치하지 못했습니다.\n\n" + ex.Message + "\n\n기록: " + SetupCore.LogPath,
                         "WinDeck 설치", MessageBoxButtons.OK, MessageBoxIcon.Warning);

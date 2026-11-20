@@ -28,6 +28,8 @@ namespace WinDeck
         public const int MaxPageBytes = 1024 * 1024;
         public const int MaxIconBytes = 1024 * 1024;
         public const int MinIconSize = 16;
+        /// <summary>아이콘으로 받는 그림의 가로·세로 최대 픽셀. 이보다 큰 그림은 쓰지 않는다.</summary>
+        public const int MaxIconPixels = 4096;
         const int RequestTimeoutMs = 8000;
         const int TotalTimeoutMs = 20000;
         const int MaxRedirects = 5;
@@ -88,7 +90,7 @@ namespace WinDeck
             string pageError = null;
             try
             {
-                byte[] html = Get(page, MaxPageBytes, true, "text/html,application/xhtml+xml,*/*;q=0.8", clock, out final);
+                byte[] html = Get(page, MaxPageBytes, true, "text/html,application/xhtml+xml,*/*;q=0.8", clock, page, out final);
                 links = ParseLinks(Encoding.UTF8.GetString(html), final);
             }
             catch (Exception ex)
@@ -127,7 +129,7 @@ namespace WinDeck
                     if (bytes == null)
                     {
                         Uri ignored;
-                        bytes = Get(c.Url, MaxIconBytes, false, "image/avif,image/webp,image/png,image/*,*/*;q=0.8", clock, out ignored);
+                        bytes = Get(c.Url, MaxIconBytes, false, "image/avif,image/webp,image/png,image/*,*/*;q=0.8", clock, page, out ignored);
                     }
                     using (Bitmap bmp = Decode(bytes))
                     {
@@ -146,9 +148,44 @@ namespace WinDeck
             return null;
         }
 
-        static bool SameHost(Uri a, Uri b)
+        /// <summary>같은 사이트인지. example.com 과 www.example.com 은 같은 사이트로 본다.</summary>
+        public static bool SameHost(Uri a, Uri b)
         {
-            return string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(BareHost(a), BareHost(b), StringComparison.OrdinalIgnoreCase);
+        }
+
+        static string BareHost(Uri u)
+        {
+            string h = u.Host;
+            return h.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? h.Substring(4) : h;
+        }
+
+        /// <summary>
+        /// 이 PC 나 사내망 안쪽을 가리키는 주소인지 (localhost, 127.x, 10.x, 172.16~31.x, 192.168.x, 169.254.x, IPv6 의 내부 주소).
+        /// 숫자로 적힌 주소와 localhost 만 본다 (이름으로 적힌 사내 서버는 구별하지 못한다).
+        /// </summary>
+        public static bool IsInternalAddress(Uri u)
+        {
+            if (u == null) return false;
+            if (u.IsLoopback) return true;
+            IPAddress ip;
+            if (!IPAddress.TryParse(u.Host.Trim('[', ']'), out ip)) return false;
+            if (IPAddress.IsLoopback(ip)) return true;
+            byte[] b = ip.GetAddressBytes();
+            if (b.Length == 4)
+                return b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168) || (b[0] == 169 && b[1] == 254);
+            return ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || (b.Length == 16 && (b[0] & 0xFE) == 0xFC);
+        }
+
+        /// <summary>
+        /// 바깥(인터넷) 사이트에서 시작했는데 내부 주소로 이어지면 막는다.
+        /// 공개 사이트가 주소 이동이나 아이콘 주소로 사용자의 사내 장비에 요청을 보내게 하지 못하도록.
+        /// 사용자가 처음부터 내부 주소를 넣었으면 그대로 받는다.
+        /// </summary>
+        static void RequireAllowed(Uri origin, Uri next)
+        {
+            if (origin != null && !IsInternalAddress(origin) && IsInternalAddress(next))
+                throw new WebException("바깥 사이트가 내부 주소로 연결하려고 해서 받지 않았습니다.");
         }
 
         static int ByScore(Candidate a, Candidate b)
@@ -158,13 +195,14 @@ namespace WinDeck
 
         /// <summary>HTTP GET. 주소 이동(301·302·303·307·308)은 직접 따라간다 (.NET Framework 는 308 을 따라가지 않는다).</summary>
         /// <param name="truncate">true: maxBytes 까지만 읽는다 (페이지). false: 더 크면 받지 않는다 (아이콘).</param>
-        static byte[] Get(Uri url, int maxBytes, bool truncate, string accept, Stopwatch clock, out Uri final)
+        static byte[] Get(Uri url, int maxBytes, bool truncate, string accept, Stopwatch clock, Uri origin, out Uri final)
         {
             Uri current = url;
             for (int hop = 0; ; hop++)
             {
                 int left = TotalTimeoutMs - (int)clock.ElapsedMilliseconds;
                 if (left < 500) throw new TimeoutException();
+                RequireAllowed(origin, current);
                 var req = (HttpWebRequest)WebRequest.Create(current);
                 req.AllowAutoRedirect = false;
                 req.UserAgent = UserAgent;
@@ -174,7 +212,19 @@ namespace WinDeck
                 req.Timeout = Math.Min(RequestTimeoutMs, left);
                 req.ReadWriteTimeout = Math.Min(RequestTimeoutMs, left);
                 if (req.Proxy != null) req.Proxy.Credentials = CredentialCache.DefaultCredentials;
-                using (var resp = (HttpWebResponse)req.GetResponse())
+                HttpWebResponse response;
+                try
+                {
+                    response = (HttpWebResponse)req.GetResponse();
+                }
+                catch (WebException we)
+                {
+                    // 오류 응답(403·404)도 닫아야 한다. 닫지 않으면 그 사이트로 가는 연결 자리(2개)를 계속 차지해서
+                    // 다음 후보(/favicon.ico 등) 요청이 시간 초과까지 기다린다. 닫은 뒤에도 상태 코드는 읽을 수 있다.
+                    if (we.Response != null) we.Response.Close();
+                    throw;
+                }
+                using (var resp = response)
                 {
                     int code = (int)resp.StatusCode;
                     if (code >= 300 && code < 400)
@@ -190,12 +240,12 @@ namespace WinDeck
                     if (!truncate && resp.ContentLength > maxBytes) throw new InvalidDataException("파일이 너무 큽니다.");
                     final = current;
                     using (Stream s = resp.GetResponseStream())
-                        return ReadLimited(s, maxBytes, truncate);
+                        return ReadLimited(s, maxBytes, truncate, clock);
                 }
             }
         }
 
-        static byte[] ReadLimited(Stream s, int maxBytes, bool truncate)
+        static byte[] ReadLimited(Stream s, int maxBytes, bool truncate, Stopwatch clock)
         {
             using (var ms = new MemoryStream())
             {
@@ -203,6 +253,8 @@ namespace WinDeck
                 int n;
                 while ((n = s.Read(buf, 0, buf.Length)) > 0)
                 {
+                    // 느린 연결에서 조금씩 오래 보내는 응답도 전체 시간 제한 안에서 끊는다.
+                    if (clock != null && clock.ElapsedMilliseconds > TotalTimeoutMs) throw new TimeoutException();
                     int room = maxBytes - (int)ms.Length;
                     if (n > room)
                     {
@@ -367,13 +419,25 @@ namespace WinDeck
             {
                 if (b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] == 0) return DecodeIco(b);
                 using (var ms = new MemoryStream(b))
-                using (Image img = Image.FromStream(ms, false, true))
-                    return new Bitmap(img);
+                    return LoadBitmap(ms);
             }
             catch (Exception)
             {
                 return null; // GDI+ 는 잘못된 그림을 OutOfMemoryException·ArgumentException 으로 알린다
             }
+        }
+
+        /// <summary>
+        /// 그림을 읽는다. 먼저 크기만 읽어서, 너무 큰 그림(가로·세로 4096 초과)은 풀지 않고 null 을 돌려준다.
+        /// 파일은 작아도 가로·세로가 수만 픽셀인 그림은 풀 때 메모리를 수백 MB 쓴다.
+        /// </summary>
+        static Bitmap LoadBitmap(MemoryStream ms)
+        {
+            using (Image head = Image.FromStream(ms, false, false))
+                if (head.Width > MaxIconPixels || head.Height > MaxIconPixels) return null;
+            ms.Position = 0;
+            using (Image img = Image.FromStream(ms, false, true))
+                return new Bitmap(img);
         }
 
         static bool LooksLikeText(byte[] b)
@@ -418,8 +482,7 @@ namespace WinDeck
             if (IsPng(b, offset))
             {
                 using (var ms = new MemoryStream(b, offset, length))
-                using (Image img = Image.FromStream(ms, false, true))
-                    return new Bitmap(img);
+                    return LoadBitmap(ms);
             }
             var one = new byte[22 + length];
             one[2] = 1; // 종류: 아이콘

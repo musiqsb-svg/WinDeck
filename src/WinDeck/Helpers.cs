@@ -86,7 +86,11 @@ namespace WinDeck
             catch (Exception) { }
         }
 
-        /// <summary>exe 를 옮긴 경우 자동 실행 경로를 현재 위치로 고친다.</summary>
+        /// <summary>
+        /// exe 를 옮긴 경우 자동 실행 경로를 현재 위치로 고친다.
+        /// 등록된 exe 가 그 자리에 그대로 있으면 고치지 않는다: 설치한 WinDeck 이 있는데 꾸러미의 app\WinDeck.exe 를
+        /// 한 번 켰다고 자동 실행이 그 복사본으로 바뀌면 안 된다.
+        /// </summary>
         public static void RefreshPathIfEnabled()
         {
             try
@@ -95,11 +99,31 @@ namespace WinDeck
                 {
                     if (k == null) return;
                     string v = k.GetValue(ValueName) as string;
-                    if (v != null && !string.Equals(v, Command, StringComparison.OrdinalIgnoreCase))
-                        k.SetValue(ValueName, Command);
+                    if (v == null || string.Equals(v, Command, StringComparison.OrdinalIgnoreCase)) return;
+                    if (RegisteredExeExists(v)) return;
+                    k.SetValue(ValueName, Command);
                 }
             }
             catch (Exception) { }
+        }
+
+        /// <summary>자동 실행 값("경로" 또는 "경로" 인자)이 가리키는 exe 가 있는지.</summary>
+        public static bool RegisteredExeExists(string command)
+        {
+            try
+            {
+                string path = (command ?? "").Trim();
+                if (path.StartsWith("\""))
+                {
+                    int end = path.IndexOf('"', 1);
+                    path = end > 0 ? path.Substring(1, end - 1) : path.Trim('"');
+                }
+                return path.Length > 0 && File.Exists(Environment.ExpandEnvironmentVariables(path));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
     }
 
@@ -110,7 +134,7 @@ namespace WinDeck
 
         public static void Export(IWin32Window owner, AppConfig cfg)
         {
-            using (var sfd = new SaveFileDialog())
+            using (var sfd = new SaveFileDialog { RestoreDirectory = true }) // 고른 폴더가 WinDeck 의 작업 폴더로 남지 않게
             {
                 sfd.Title = "설정 내보내기 (백업)";
                 sfd.Filter = Filter;
@@ -134,7 +158,7 @@ namespace WinDeck
         /// </summary>
         public static string PickImportFile(IWin32Window owner, string lastFolder)
         {
-            using (var ofd = new OpenFileDialog())
+            using (var ofd = new OpenFileDialog { RestoreDirectory = true }) // 고른 폴더가 WinDeck 의 작업 폴더로 남지 않게
             {
                 ofd.Title = "설정 불러오기";
                 ofd.Filter = Filter;
@@ -176,12 +200,23 @@ namespace WinDeck
             get { return Path.Combine(ConfigStore.Dir, "error.log"); }
         }
 
+        /// <summary>기록 파일이 이 크기를 넘으면 error.old.log 로 넘기고 새로 쓴다 (같은 오류가 되풀이되어도 끝없이 커지지 않게).</summary>
+        public const long MaxLogBytes = 1024 * 1024;
+
         public static void Write(Exception ex)
         {
             try
             {
                 Directory.CreateDirectory(ConfigStore.Dir);
-                File.AppendAllText(LogPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + ex
+                string log = LogPath;
+                var fi = new FileInfo(log);
+                if (fi.Exists && fi.Length > MaxLogBytes)
+                {
+                    string old = Path.Combine(ConfigStore.Dir, "error.old.log");
+                    File.Delete(old);
+                    File.Move(log, old);
+                }
+                File.AppendAllText(log, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + ex
                     + Environment.NewLine + Environment.NewLine, Encoding.UTF8);
             }
             catch (Exception) { }

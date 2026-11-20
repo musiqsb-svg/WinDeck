@@ -68,7 +68,7 @@ namespace WinDeck
             Add(0xDD, "]", "CloseBracket", "OemCloseBrackets");
             for (int i = 0; i <= 9; i++) Add((ushort)(0x60 + i), "Num" + i, "NumPad" + i);
             Add(0x6A, "Num*", "Multiply");
-            Add(0x6B, "Num+", "Add");
+            Add(0x6B, "NumPlus", "Add"); // "Num+" 로 적으면 + 가 구분 글자와 겹쳐 다시 읽지 못한다
             Add(0x6D, "Num-", "Subtract");
             Add(0x6E, "Num.", "Decimal");
             Add(0x6F, "Num/", "Divide");
@@ -91,7 +91,12 @@ namespace WinDeck
         {
             if (text == null || text.Trim().Length == 0) throw new FormatException("키가 비어 있습니다.");
             var c = new KeyCombo();
-            foreach (string part in text.Split('+'))
+            // 1.6.0 까지 숫자판 + 키를 "Num+" 로 적었다 (예: "Ctrl+Num+"). 그렇게 적은 글도 읽는다.
+            string source = text.Trim();
+            if (source.EndsWith("Num+", StringComparison.OrdinalIgnoreCase)
+                && (source.Length == 4 || source[source.Length - 5] == '+' || char.IsWhiteSpace(source[source.Length - 5])))
+                source = source.Substring(0, source.Length - 4) + "NumPlus";
+            foreach (string part in source.Split('+'))
             {
                 string raw = part.Trim();
                 if (raw.Length == 0) throw new FormatException("'" + text.Trim() + "' 형식이 올바르지 않습니다.");

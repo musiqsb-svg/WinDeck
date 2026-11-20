@@ -43,6 +43,7 @@ static partial class SmokeTest
         {
             Environment.SetEnvironmentVariable("WINDECK_INSTANCE", null);
             DeleteTestRegistry(testId);
+            DeleteTestTemp(testId);
             ConfigStore.AppDir = null;
             ConfigStore.Dir = savedDir;
         }
@@ -384,23 +385,60 @@ static partial class SmokeTest
             ChecksumUrl = new Uri(sumsFile).AbsoluteUri
         };
         var steps = new List<string>();
-        PreparedUpdate p = Updater.Prepare(local, (s, n) => steps.Add(s), null);
-        Check(p.Installer && File.Exists(p.Path) && Path.GetFileName(p.Path) == Path.GetFileName(zip),
-            "update of a WinDeck that is not installed uses the setup, not the portable zip");
-        Check(steps.Any(s => s.StartsWith("받는 중")) && steps.Last().Contains("검사"), "download progress is reported");
-
-        File.WriteAllText(sumsFile, new string('0', 64) + "  " + Path.GetFileName(zip) + "\n");
+        // 1.6.1: 보통 실행에서는 https 주소만 받는다. file:// 은 점검용 주소를 줄 때(WINDECK_INSTANCE + WINDECK_UPDATE_URL)만 받는다.
         threw = false;
         try { Updater.Prepare(local, (s, n) => { }, null); }
-        catch (UpdateException ex) { threw = ex.Message.Contains("SHA-256"); }
-        Check(threw, "download whose SHA-256 does not match is refused");
+        catch (UpdateException ex) { threw = ex.Message.Contains("https"); }
+        Check(threw, "a release with file:// addresses is refused in normal use");
+        string updId = "upd" + Process.GetCurrentProcess().Id;
+        string outerInstance = Environment.GetEnvironmentVariable("WINDECK_INSTANCE");
+        Environment.SetEnvironmentVariable("WINDECK_INSTANCE", updId);
+        Environment.SetEnvironmentVariable("WINDECK_UPDATE_URL", local.ChecksumUrl);
+        try
+        {
+            PreparedUpdate p = Updater.Prepare(local, (s, n) => steps.Add(s), null);
+            Check(p.Installer && File.Exists(p.Path) && Path.GetFileName(p.Path) == Path.GetFileName(zip),
+                "update of a WinDeck that is not installed uses the setup, not the portable zip");
+            Check(p.Path.Contains("WinDeck-update-" + updId), "test runs download into their own folder, not the one the user's WinDeck uses", p.Path);
+            Check(steps.Any(s => s.StartsWith("받는 중")) && steps.Last().Contains("검사"), "download progress is reported");
 
-        local.ChecksumUrl = null;
-        threw = false;
-        try { Updater.Prepare(local, (s, n) => { }, null); }
-        catch (UpdateException) { threw = true; }
-        Check(threw, "release without a SHA-256 list is not installed automatically");
+            File.WriteAllText(sumsFile, new string('0', 64) + "  " + Path.GetFileName(zip) + "\n");
+            threw = false;
+            try { Updater.Prepare(local, (s, n) => { }, null); }
+            catch (UpdateException ex) { threw = ex.Message.Contains("SHA-256"); }
+            Check(threw, "download whose SHA-256 does not match is refused");
+
+            local.ChecksumUrl = null;
+            threw = false;
+            try { Updater.Prepare(local, (s, n) => { }, null); }
+            catch (UpdateException) { threw = true; }
+            Check(threw, "release without a SHA-256 list is not installed automatically");
+        }
+        finally
+        {
+            DeleteTestTemp(updId);
+            Environment.SetEnvironmentVariable("WINDECK_INSTANCE", outerInstance);
+            Environment.SetEnvironmentVariable("WINDECK_UPDATE_URL", null);
+            DeleteTestRegistry(updId);
+        }
         ConfigStore.AppDir = null;
+    }
+
+    /// <summary>점검용 실행이 %TEMP% 에 만든 폴더(설정, 받은 업데이트 파일)를 지운다.</summary>
+    static void DeleteTestTemp(string testId)
+    {
+        if (string.IsNullOrEmpty(testId)) return;
+        foreach (string d in new[] { Path.Combine(Path.GetTempPath(), "WinDeck-test", testId), Path.Combine(Path.GetTempPath(), "WinDeck-update-" + testId) })
+        {
+            try { if (Directory.Exists(d)) Directory.Delete(d, true); }
+            catch (Exception) { }
+        }
+        try
+        {
+            string parent = Path.Combine(Path.GetTempPath(), "WinDeck-test");
+            if (Directory.Exists(parent) && Directory.GetFileSystemEntries(parent).Length == 0) Directory.Delete(parent);
+        }
+        catch (Exception) { }
     }
 
     /// <summary>release.ps1 과 같은 모양의 포터블 zip (WinDeck/ 아래 exe·안내·WinDeckData·팀 기본 설정).</summary>

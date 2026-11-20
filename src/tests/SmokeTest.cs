@@ -39,6 +39,8 @@ static partial class SmokeTest
 
     static int fails;
     static string outDir;
+    /// <summary>점검 출력 폴더라는 표식 파일 (run-tests.ps1 도 같은 이름을 쓴다).</summary>
+    const string OutDirMarker = ".windeck-test-output";
     /// <summary>build.ps1 결과가 있는 프로젝트 폴더 (WinDeck 설치.exe, WinDeck 제거.exe, app\).</summary>
     static string packageDir;
     /// <summary>실제 1.3.0 포터블 zip (1.3 → 새 버전 자동 업데이트 점검용). 없으면 null.</summary>
@@ -86,8 +88,17 @@ static partial class SmokeTest
 
         if (args.Length == 2 && args[0] == "--target") return RunTarget(args[1]);
 
-        outDir = args[0];
+        outDir = Path.GetFullPath(args[0]);
+        // 점검은 출력 폴더 아래의 정해진 이름 폴더(cfg, setup_root 등)를 통째로 지우고 새로 만든다.
+        // 그래서 점검용으로 만든 폴더(표식 파일이 있거나 비어 있는 폴더)에서만 실행한다. 다른 작업 폴더를 잘못 넘겼을 때 멈춘다.
+        string outMarker = Path.Combine(outDir, OutDirMarker);
+        if (Directory.Exists(outDir) && Directory.GetFileSystemEntries(outDir).Length > 0 && !File.Exists(outMarker))
+        {
+            Console.WriteLine("STOP  '" + outDir + "' is not empty and was not made by these tests (no " + OutDirMarker + "). Pass an empty folder.");
+            return 99;
+        }
         Directory.CreateDirectory(outDir);
+        File.WriteAllText(outMarker, "WinDeck test output folder. The tests delete and recreate folders in here.\r\n");
         int pkgArg = Array.IndexOf(args, "--package");
         packageDir = pkgArg >= 0 && pkgArg + 1 < args.Length ? args[pkgArg + 1] : null;
         int oldArg = Array.IndexOf(args, "--old13");
@@ -114,6 +125,7 @@ static partial class SmokeTest
         Safe("v14", TestV14);
         Safe("v15", TestV15);
         Safe("v16", TestV16);
+        Safe("v17", TestV17);
         if (packageDir != null) Safe("setup", () => TestSetup(packageDir));
         if (args.Contains("--actions")) Safe("real actions", TestRealActions);
         if (args.Contains("--input")) Safe("input", TestInput);
@@ -1002,6 +1014,7 @@ static partial class SmokeTest
 
                 TestMouseMove(deck);
                 TestMouseEdgeFlip(deck);
+                TestMouseWheelAndCancel(deck);
             }
         }
         finally

@@ -73,9 +73,10 @@ namespace WinDeck.Setup
                 }
 
                 Exception error = null;
+                string left = null;
                 var t = new Thread(() =>
                 {
-                    try { SetupCore.Uninstall(deleteSettings, s => { }); }
+                    try { left = SetupCore.Uninstall(deleteSettings, s => { }); }
                     catch (Exception ex) { error = ex; }
                 });
                 t.SetApartmentState(ApartmentState.STA); // 바로가기 대상 읽기(COM)
@@ -83,7 +84,10 @@ namespace WinDeck.Setup
                 t.Join();
                 if (error != null) throw error;
 
-                Show(silent, "WinDeck 을 제거했습니다." + (deleteSettings ? "" : "\n버튼 설정은 남겨 두었습니다: " + InstallInfo.SettingsDir), MessageBoxIcon.Information);
+                Show(silent, "WinDeck 을 제거했습니다."
+                    + (deleteSettings ? "" : "\n버튼 설정은 남겨 두었습니다: " + InstallInfo.SettingsDir)
+                    + (left == null ? "" : "\n\n설치 폴더는 남겨 두었습니다 (설치가 만들지 않은 파일이 있거나, 다른 프로그램이 쓰고 있습니다):\n" + left),
+                    MessageBoxIcon.Information);
                 return 0;
             }
             catch (Exception ex)

@@ -12,8 +12,16 @@ $src = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $top = Split-Path -Parent $src
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $build = Join-Path $src 'build\tests'
+# The tests delete and recreate fixed-name folders (cfg, setup_root, ...) under the output folder, so they only run in
+# an empty folder or one made by an earlier run (marker file). This stops a wrong path from losing someone's work.
+$marker = '.windeck-test-output'
+if ((Test-Path -LiteralPath $OutDir) -and @(Get-ChildItem -LiteralPath $OutDir -Force).Count -gt 0 -and
+    -not (Test-Path -LiteralPath (Join-Path $OutDir $marker))) {
+    throw "'$OutDir' is not empty and was not made by these tests (no $marker). Pass an empty folder."
+}
 New-Item -ItemType Directory -Force $build, $OutDir | Out-Null
-$OutDir = (Resolve-Path $OutDir).Path
+$OutDir = (Resolve-Path -LiteralPath $OutDir).Path
+[IO.File]::WriteAllText((Join-Path $OutDir $marker), "WinDeck test output folder. The tests delete and recreate folders in here.`r`n")
 foreach ($need in @('app\WinDeck.exe', 'WinDeck 설치.exe', 'WinDeck 제거.exe')) {
     if (-not (Test-Path (Join-Path $top $need))) { throw "Missing $need - run src\build.ps1 first." }
 }

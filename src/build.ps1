@@ -28,7 +28,8 @@ if ($LASTEXITCODE -ne 0) { throw 'IconGen compile failed.' }
 & $iconGen $ico
 if ($LASTEXITCODE -ne 0) { throw 'Icon generation failed.' }
 
-# 2) Compile app\WinDeck.exe (close a running copy of app\WinDeck.exe first, restart it afterwards)
+# 2) Compile WinDeck.exe into src\build first. app\ is only replaced after the compile succeeded, so a compile
+#    error leaves the last good app\ (and a running copy of it) untouched.
 $sources = Get-ChildItem (Join-Path $src 'WinDeck') -Filter *.cs | ForEach-Object { $_.FullName }
 # Built-in icon library (assets\icons\*.png + manifest.tsv) is embedded as WinDeck.Icons.* resources
 $resources = @()
@@ -40,6 +41,15 @@ if (Test-Path (Join-Path $iconDir 'manifest.tsv')) {
 # Copyright notice kept inside the exe (full text, Korean + English)
 $resources += "/resource:$(Join-Path $src 'NOTICE.md'),WinDeck.NOTICE.md"
 $exe = Join-Path $appOut 'WinDeck.exe'
+$staged = Join-Path $build 'WinDeck.exe'
+& $csc /nologo /codepage:65001 /target:winexe /optimize+ /platform:anycpu `
+    "/out:$staged" "/win32icon:$ico" "/win32manifest:$(Join-Path $src 'WinDeck\app.manifest')" `
+    /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
+    /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
+    $resources $sources
+if ($LASTEXITCODE -ne 0) { throw 'WinDeck compile failed. app\ was not changed.' }
+
+# 3) Replace app\ (close a running copy of app\WinDeck.exe first, restart it afterwards)
 $running = @(Get-Process WinDeck -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
 if ($running.Count -gt 0) {
     Write-Host 'Closing running app\WinDeck.exe for rebuild (saving settings first)...'
@@ -52,15 +62,9 @@ if ($running.Count -gt 0) {
 }
 # Start from an empty app\ so files removed from the package do not linger.
 Get-ChildItem $appOut -Force | Remove-Item -Recurse -Force
-& $csc /nologo /codepage:65001 /target:winexe /optimize+ /platform:anycpu `
-    "/out:$exe" "/win32icon:$ico" "/win32manifest:$(Join-Path $src 'WinDeck\app.manifest')" `
-    /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
-    /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
-    $resources $sources
-$compileExit = $LASTEXITCODE
-if ($compileExit -ne 0) { throw 'WinDeck compile failed.' }
+Move-Item $staged $exe
 
-# 3) Files that ship next to the exe: license, guide, optional team default buttons
+# 4) Files that ship next to the exe: license, guide, optional team default buttons
 Copy-Item (Join-Path $src 'LICENSE') (Join-Path $appOut 'LICENSE.txt')
 Copy-Item (Join-Path $src 'NOTICE.md') (Join-Path $appOut 'NOTICE.txt')
 Get-ChildItem (Join-Path $src 'deploy') -Filter '*.txt' | ForEach-Object { Copy-Item $_.FullName $appOut }
@@ -70,7 +74,7 @@ if (Test-Path $defaults) {
     Copy-Item $defaults $appOut
 }
 
-# 4) Setup programs at the top of the project folder
+# 5) Setup programs at the top of the project folder
 $setup = Join-Path $src 'build-setup.ps1'
 & $setup -Kind Installer -Version $version -Out (Join-Path $root 'WinDeck 설치.exe') -Icon $ico
 & $setup -Kind Uninstaller -Version $version -Out (Join-Path $root 'WinDeck 제거.exe') -Icon $ico

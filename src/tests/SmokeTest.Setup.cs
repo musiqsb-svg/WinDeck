@@ -320,6 +320,8 @@ static partial class SmokeTest
             Check((string)RegValue(InstallInfo.RunKey, "WinDeck") == "\"" + exe + "\"", "auto start kept and pointed at the new exe");
             Check(RunExe(pkgUninstaller, "/SILENT", 30000) == 0 && !Directory.Exists(dir) && RegValue(InstallInfo.RunKey, "WinDeck") == null,
                 "uninstall also removes the auto start value that points to the install folder");
+
+            TestSetupSafety(root, pkg, installer, pkgUninstaller, version);
         }
         catch (Exception ex)
         {
@@ -331,8 +333,141 @@ static partial class SmokeTest
             Environment.SetEnvironmentVariable("WINDECK_SETUP_ROOT", null);
             UseConfigDir(null);
             DeleteTestRegistry(testId);
+            DeleteTestTemp(testId);
         }
         Check(RealInstallFingerprint() == realBefore, "setup tests left the real install folder, shortcuts and registry untouched");
+    }
+
+    /// <summary>dir 을 작업 폴더로 잡고 30초쯤 켜져 있는 프로그램 (WinDeck 버튼으로 연 브라우저·명령 창을 흉내 낸다).</summary>
+    static Process HoldFolder(string dir)
+    {
+        string ping = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "PING.EXE");
+        Process p = Process.Start(new ProcessStartInfo(ping, "-n 40 127.0.0.1")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = dir
+        });
+        Thread.Sleep(400);
+        return p;
+    }
+
+    static void StopHolder(Process p)
+    {
+        try
+        {
+            if (!p.HasExited) p.Kill();
+            p.WaitForExit(3000);
+        }
+        catch (Exception) { }
+        Thread.Sleep(200);
+    }
+
+    /// <summary>
+    /// 1.6.1: 설치·제거가 도중에 막혀도 쓰던 것을 망가뜨리지 않는지, 설치가 만든 것만 지우는지.
+    /// TestSetup 의 격리된 폴더·시험용 레지스트리 키 안에서 부른다. 시작과 끝은 '설치 안 됨' 상태.
+    /// </summary>
+    static void TestSetupSafety(string root, string pkg, string installer, string pkgUninstaller, string version)
+    {
+        string dir = InstallInfo.InstallDir;
+        string appDir = InstallInfo.InstalledAppDir;
+        string exe = InstallInfo.InstalledExe;
+        string marker = Path.Combine(dir, InstallInfo.MarkerFile);
+        string pkgApp = Path.Combine(pkg, "app");
+        string staging = Path.Combine(dir, "app.new");
+        const string quiet = "/SILENT /SUPPRESSMSGBOXES";
+
+        // 8) 새 파일을 다 복사하지 못하면 쓰던 버전을 그대로 둔다 (예전에는 app\ 를 먼저 지워서 WinDeck.exe 가 사라졌다)
+        Check(RunExe(installer, quiet, 60000) == 0, "install (start of the safety tests)");
+        string oldFile = Path.Combine(appDir, "old-version-file.txt");
+        File.WriteAllText(oldFile, "x");
+        using (new FileStream(Path.Combine(pkgApp, "LICENSE.txt"), FileMode.Open, FileAccess.Read, FileShare.None))
+            Check(RunExe(installer, quiet, 60000) == 1, "install stops when a file of the package cannot be read");
+        Check(Ver(exe) == version && File.Exists(oldFile) && File.Exists(Path.Combine(appDir, "LICENSE.txt")) && !Directory.Exists(staging),
+            "a failed install leaves the installed version complete (new files are copied aside first, nothing half done)");
+        Check(InstallInfo.IsOurInstallDir(dir) && RegKeyExists(InstallInfo.UninstallKey), "after the failed install it can still be uninstalled or installed again");
+
+        // 9) WinDeck 버튼으로 연 프로그램이 app 폴더를 작업 폴더로 잡고 있어도 설치·제거가 된다
+        //    (1.6.0 까지: 폴더를 지우려다 안의 파일만 지워지고 실패 → 업데이트 뒤 WinDeck 이 사라졌다)
+        Process holder = HoldFolder(appDir);
+        try
+        {
+            bool cannotDelete = false;
+            try { Directory.Move(appDir, appDir + ".probe"); Directory.Move(appDir + ".probe", appDir); }
+            catch (IOException) { cannotDelete = true; }
+            Check(cannotDelete, "(the test program really holds the app folder: Windows refuses to rename it)");
+            Check(RunExe(installer, quiet, 60000) == 0 && Ver(exe) == version && !File.Exists(oldFile) && !Directory.Exists(staging),
+                "install works while another program holds the app folder; old files are cleared, no temporary folder is left");
+            Check(RunExe(pkgUninstaller, "/SILENT", 30000) == 0 && !File.Exists(exe) && !File.Exists(marker) && !RegKeyExists(InstallInfo.UninstallKey)
+                && !File.Exists(InstallInfo.StartMenuShortcut) && FilesIn(dir).Length == 0,
+                "uninstall works too: every file, the shortcut and the registration are removed", string.Join(", ", FilesIn(dir)));
+            Check(Directory.Exists(appDir), "(the held folder itself stays, empty, until that program closes)");
+        }
+        finally
+        {
+            StopHolder(holder);
+        }
+        Check(RunExe(installer, quiet, 60000) == 0 && Ver(exe) == version && InstallInfo.IsOurInstallDir(dir), "installing again over the left-over empty folder works");
+
+        // 10) 제거는 설치가 만든 것만 지운다: 설치 폴더에 사용자가 둔 파일은 남긴다
+        string mine = Path.Combine(dir, "내 메모.txt");
+        File.WriteAllText(mine, "사용자가 둔 파일");
+        Check(RunExe(pkgUninstaller, "/SILENT", 30000) == 0 && !Directory.Exists(appDir) && !File.Exists(marker) && !File.Exists(Path.Combine(dir, InstallInfo.UninstallerExe))
+            && !RegKeyExists(InstallInfo.UninstallKey), "uninstall removes everything setup made");
+        Check(File.Exists(mine) && Directory.GetFileSystemEntries(dir).Length == 1, "a file the user put into the install folder is kept (and so is the folder)",
+            string.Join(", ", Directory.GetFileSystemEntries(dir).Select(Path.GetFileName).ToArray()));
+        Check(File.ReadAllText(SetupCore_LogPath(), Encoding.UTF8).Contains("not made by setup: 내 메모.txt"), "the setup log names what was kept");
+        File.Delete(mine);
+        Directory.Delete(dir);
+
+        // 11) 설치 폴더 안의 폴더 연결(접합점)은 연결만 지운다: 가리키는 곳의 파일은 건드리지 않는다
+        Check(RunExe(installer, quiet, 60000) == 0, "install (for the folder-link test)");
+        string outside = FreshDir("setup_outside");
+        string precious = Path.Combine(outside, "keep.txt");
+        File.WriteAllText(precious, "설치 폴더 밖의 파일");
+        File.SetAttributes(precious, FileAttributes.ReadOnly);
+        string link = Path.Combine(appDir, "link");
+        string cmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+        bool linked;
+        using (Process mk = Process.Start(new ProcessStartInfo(cmd, "/d /c mklink /J \"" + link + "\" \"" + outside + "\"") { UseShellExecute = false, CreateNoWindow = true }))
+            linked = mk.WaitForExit(10000) && mk.ExitCode == 0 && File.Exists(Path.Combine(link, "keep.txt"));
+        if (linked)
+        {
+            Check(RunExe(pkgUninstaller, "/SILENT", 30000) == 0 && !Directory.Exists(dir), "uninstall with a folder link inside the install folder");
+            Check(File.Exists(precious) && (File.GetAttributes(precious) & FileAttributes.ReadOnly) != 0,
+                "the files the link points to are untouched (not deleted, attributes not changed)");
+        }
+        else
+        {
+            Console.WriteLine("SKIP  folder link test (could not make a junction)");
+            RunExe(pkgUninstaller, "/SILENT", 30000);
+        }
+        File.SetAttributes(precious, FileAttributes.Normal);
+        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+
+        // 12) 1.3 이하를 다른 폴더에 설치해 쓰던 경우: 그 '설치된 앱' 등록 정보는 지우지 않는다 (옛 설치를 제거할 수 있게)
+        string innoKey = InstallInfo.UninstallParentKey + @"\" + InstallInfo.InnoUninstallKey;
+        using (RegistryKey k = Registry.CurrentUser.CreateSubKey(innoKey))
+        {
+            k.SetValue("DisplayName", "WinDeck");
+            k.SetValue("Inno Setup: App Path", Path.Combine(root, @"OtherDrive\WinDeck"));
+        }
+        Check(RunExe(installer, quiet, 60000) == 0 && RegKeyExists(innoKey), "the uninstall entry of a 1.3 copy installed in another folder is kept");
+        using (RegistryKey k = Registry.CurrentUser.CreateSubKey(innoKey)) k.SetValue("Inno Setup: App Path", dir + "\\");
+        Check(RunExe(installer, quiet, 60000) == 0 && !RegKeyExists(innoKey), "the entry of a 1.3 copy in the same folder is replaced as before");
+
+        // 13) 꾸러미를 설치 폴더에 풀고 그 안의 설치 프로그램을 실행해도 자기 파일을 지우지 않는다
+        string inPlace = Path.Combine(dir, InstallInfo.InstallerExe);
+        File.Copy(installer, inPlace, true);
+        Check(RunExe(inPlace, quiet, 60000) == 0 && Ver(exe) == version && File.Exists(Path.Combine(dir, InstallInfo.UninstallerExe)),
+            "running the installer from inside the install folder keeps the files in place");
+        Check(RunExe(pkgUninstaller, "/SILENT", 30000) == 0 && !File.Exists(exe) && !RegKeyExists(InstallInfo.UninstallKey), "uninstall afterwards");
+        if (Directory.Exists(dir)) Directory.Delete(dir, true); // 남은 것: 사용자가 풀어 둔 'WinDeck 설치.exe'
+    }
+
+    static string[] FilesIn(string dir)
+    {
+        return Directory.Exists(dir) ? Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Select(Path.GetFileName).ToArray() : new string[0];
     }
 
     /// <summary>설치 프로그램이 점검 때 쓰는 기록 파일 (InstallInfo.TestRoot\setup.log).</summary>
@@ -477,6 +612,30 @@ static partial class SmokeTest
             Check(Ver(exe) == AppInfo.Version, "the copy that was not installed is left as it was");
             Check(RunApp(installed, "--exit", 15000) == 0 && WaitFor(() => !AppInstance.IsRunning(), 5000), "updated WinDeck exits on request");
 
+            // 4-1) 자동 업데이트(창 없이, 다시 켜기)가 실패하면: 쓰던 WinDeck 이 그대로 남고 다시 켜진다
+            //      (1.6.0 까지: 알림도 없이 WinDeck 이 꺼진 채로 남았다)
+            if (packageDir != null)
+            {
+                string pkg = FreshDir("proc_pkg");
+                File.Copy(Path.Combine(packageDir, InstallInfo.InstallerExe), Path.Combine(pkg, InstallInfo.InstallerExe));
+                File.Copy(Path.Combine(packageDir, InstallInfo.UninstallerExe), Path.Combine(pkg, InstallInfo.UninstallerExe));
+                CopyDir(Path.Combine(packageDir, "app"), Path.Combine(pkg, "app"));
+                p = StartApp(installed, "", null);
+                started.Add(p);
+                Check(WaitFor(AppInstance.IsRunning, 10000), "installed WinDeck running before the failing update");
+                Thread.Sleep(1000);
+                int code;
+                using (new FileStream(Path.Combine(pkg, @"app\LICENSE.txt"), FileMode.Open, FileAccess.Read, FileShare.None))
+                    code = RunExe(Path.Combine(pkg, InstallInfo.InstallerExe), "/SILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1", 60000);
+                Check(code == 1 && p.WaitForExit(5000), "the silent update fails (a package file cannot be read) after closing the running WinDeck", code.ToString());
+                Check(Ver(installed) == "99.0.0" && !Directory.Exists(Path.Combine(InstallInfo.InstallDir, "app.new")), "the installed version is untouched by the failed update");
+                Check(WaitFor(AppInstance.IsRunning, 15000) && FindApp(installed, 5000) != null, "WinDeck is started again after the failed update (it does not just disappear)");
+                Check(File.ReadAllText(SetupCore_LogPath(), Encoding.UTF8).Contains("WinDeck.exe --update-failed"), "it is started with --update-failed so that it tells the user");
+                Thread.Sleep(1500);
+                Check(ReadShared(config).Pages[0].Name == "업데이트 점검", "settings unchanged after the failed update");
+                Check(RunApp(installed, "--exit", 15000) == 0 && WaitFor(() => !AppInstance.IsRunning(), 5000), "the restarted WinDeck exits on request");
+            }
+
             // 5) 설치한 WinDeck 제거 ('설치된 앱'의 제거 단추와 같은 실행)
             Check(RunExe(Path.Combine(InstallInfo.InstallDir, InstallInfo.UninstallerExe), "/SILENT", 30000) == 0
                 && WaitFor(() => !Directory.Exists(InstallInfo.InstallDir), 20000), "uninstall removes the updated install");
@@ -494,7 +653,7 @@ static partial class SmokeTest
                 try
                 {
                     string f = p.MainModule.FileName;
-                    if (f.StartsWith(outDir, StringComparison.OrdinalIgnoreCase)) p.Kill();
+                    if (InstallInfo.IsInside(f, outDir)) p.Kill(); // 점검 폴더 안의 WinDeck 만 (이름이 비슷한 옆 폴더는 아님)
                 }
                 catch (Exception) { }
             }
@@ -502,6 +661,14 @@ static partial class SmokeTest
             Environment.SetEnvironmentVariable("WINDECK_SETUP_ROOT", null);
             UseConfigDir(null);
             DeleteTestRegistry(testId);
+            DeleteTestTemp(testId);
+            // 실제 1.3.0 은 받은 파일을 %TEMP%\WinDeck-update 에 둔다 (사용자의 WinDeck 과 같은 곳). 가짜 릴리스 99.0.0 것만 지운다.
+            try
+            {
+                string fake99 = Path.Combine(Path.GetTempPath(), @"WinDeck-update\99.0.0");
+                if (Directory.Exists(fake99)) Directory.Delete(fake99, true);
+            }
+            catch (Exception) { }
             ConfigStore.Dir = savedDir;
         }
         Check(RealInstallFingerprint() == realBefore, "process tests left the real install folder, shortcuts and registry untouched");

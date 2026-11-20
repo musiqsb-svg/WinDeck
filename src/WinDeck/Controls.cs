@@ -139,12 +139,14 @@ namespace WinDeck
         {
             if (moving)
             {
+                // 왼쪽 버튼을 놓아야 '놓기'다. 끄는 중 오른쪽·가운데 버튼을 눌렀다 떼면 끌기를 취소한다.
+                bool cancel = e.Button != MouseButtons.Left;
                 moving = false;
                 mouseDown = false;
                 pressed = false;
                 Invalidate();
                 base.OnMouseUp(e);
-                if (MoveEnded != null) MoveEnded(this, PointToScreen(e.Location), false);
+                if (MoveEnded != null) MoveEnded(this, PointToScreen(e.Location), cancel);
                 return;
             }
             bool fire = pressed && e.Button == MouseButtons.Left && ClientRectangle.Contains(e.Location);
@@ -173,6 +175,9 @@ namespace WinDeck
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             if (Wheel != null) Wheel(e.Delta);
+            // 처리했다고 표시한다. 표시하지 않으면 Windows 가 같은 휠 알림을 패널 창에도 보내서 한 칸에 페이지가 두 번 넘어간다.
+            var handled = e as HandledMouseEventArgs;
+            if (handled != null) handled.Handled = true;
             base.OnMouseWheel(e);
         }
 
@@ -314,6 +319,7 @@ namespace WinDeck
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
                 | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             TabStop = false;
+            Cursor = Cursors.Default; // 정하지 않으면 패널의 '옮기기' 커서(네 방향 화살표)를 따라간다
         }
 
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
@@ -392,6 +398,7 @@ namespace WinDeck
     {
         bool capturing;
         Color normalBack;
+        ImeMode normalIme;
 
         public bool AppendMode { get; set; }
         public bool Capturing { get { return capturing; } }
@@ -403,6 +410,9 @@ namespace WinDeck
             capturing = true;
             normalBack = BackColor;
             BackColor = Color.FromArgb(255, 246, 214);
+            // 한글 입력 상태면 글자 키가 입력기로 가서 어떤 키인지 알 수 없다 ("ProcessKey" 로 적힌다). 받는 동안 입력기를 끈다.
+            normalIme = ImeMode;
+            ImeMode = ImeMode.Disable;
             Focus();
             if (CaptureChanged != null) CaptureChanged(this, EventArgs.Empty);
         }
@@ -412,6 +422,7 @@ namespace WinDeck
             if (!capturing) return;
             capturing = false;
             BackColor = normalBack;
+            ImeMode = normalIme;
             if (CaptureChanged != null) CaptureChanged(this, EventArgs.Empty);
         }
 
@@ -422,6 +433,7 @@ namespace WinDeck
             if (code == Keys.ControlKey || code == Keys.ShiftKey || code == Keys.Menu
                 || code == Keys.LWin || code == Keys.RWin || code == Keys.None)
                 return true; // 수식키만 눌린 상태: 다음 키를 기다린다
+            if (code == Keys.ProcessKey) return true; // 입력기가 가져간 키: 어떤 키인지 알 수 없으므로 다음 키를 기다린다
 
             bool win = (Native.GetAsyncKeyState(0x5B) & 0x8000) != 0 || (Native.GetAsyncKeyState(0x5C) & 0x8000) != 0;
             var combo = new KeyCombo

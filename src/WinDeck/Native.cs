@@ -13,6 +13,10 @@ namespace WinDeck
     {
         public const int WM_HOTKEY = 0x0312;
         public const int WM_MOUSEACTIVATE = 0x0021;
+        /// <summary>모니터 구성·해상도가 바뀜.</summary>
+        public const int WM_DISPLAYCHANGE = 0x007E;
+        /// <summary>작업 표시줄 위치 등 시스템 설정이 바뀜.</summary>
+        public const int WM_SETTINGCHANGE = 0x001A;
         public const int MA_NOACTIVATE = 3;
         public const int WS_EX_TOOLWINDOW = 0x00000080;
         public const int WS_EX_NOACTIVATE = 0x08000000;
@@ -96,6 +100,11 @@ namespace WinDeck
 
         [DllImport("user32.dll")]
         public static extern short GetAsyncKeyState(int vKey);
+
+        /// <summary>화면을 잠근다 (Win+L 과 같다).</summary>
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool LockWorkStation();
 
         [DllImport("user32.dll")]
         public static extern uint MapVirtualKey(uint uCode, uint uMapType);

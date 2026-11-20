@@ -230,11 +230,65 @@ namespace WinDeck
             btnTest.Click += delegate { TestRun(); };
             btnOk.Click += delegate { Accept(); };
 
+            // Tab 순서를 화면에 보이는 순서로 맞춘다 (컨트롤을 넣은 순서와 다르다).
+            var order = new List<Control> { txtTitle, txtDesc, cboAction };
+            foreach (string a in ActionTypes.All)
+                if (panels.ContainsKey(a)) order.Add(panels[a]);
+            order.AddRange(new Control[] { btnLibrary, btnIcon, btnIconClear, btnBackCustom, txtBackHex, btnFore, btnForeAuto, txtForeHex,
+                txtKeyHotkey, btnKeyRecord, btnTest, btnOk, btnCancel });
+            for (int i = 0; i < order.Count; i++) order[i].TabIndex = i;
+
             // DPI 배율은 모든 컨트롤을 추가한 뒤에 지정해야 크기가 두 번 커지지 않는다.
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
             ResumeLayout(false);
             PerformLayout();
+        }
+
+        /// <summary>
+        /// 한 줄 입력란에서 Enter = [확인]. 여러 줄 입력란(설명, 입력할 문장), 색 코드 칸(Enter = 색 적용),
+        /// 단축키를 받는 칸은 그대로 둔다.
+        /// </summary>
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Enter)
+            {
+                Control a = ActiveControl;
+                if (a != null && (a == txtTitle || a == txtFolder || a == txtUrl || a == txtRun || a == txtArgs))
+                {
+                    Accept();
+                    return true;
+                }
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>
+        /// 창이 화면보다 크면 (작은 화면에서 큰 배율) 화면에 맞게 줄이고 스크롤할 수 있게 한다.
+        /// 그대로 두면 [확인]·[취소]가 작업 표시줄 아래로 가서 누를 수 없다.
+        /// </summary>
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            FitToScreen(Screen.FromRectangle(Bounds).WorkingArea);
+        }
+
+        /// <summary>창을 area 안에 들어가게 맞춘다. 줄였으면 true.</summary>
+        public bool FitToScreen(Rectangle area)
+        {
+            bool shrunk = false;
+            if (Height > area.Height || Width > area.Width)
+            {
+                AutoScroll = true;
+                int extraW = Height > area.Height ? SystemInformation.VerticalScrollBarWidth : 0;
+                int extraH = Width > area.Width ? SystemInformation.HorizontalScrollBarHeight : 0;
+                Size = new Size(Math.Min(Width + extraW, area.Width), Math.Min(Height + extraH, area.Height));
+                shrunk = true;
+            }
+            int x = Math.Max(area.Left, Math.Min(Left, area.Right - Width));
+            int y = Math.Max(area.Top, Math.Min(Top, area.Bottom - Height));
+            if (shrunk || x != Left || y != Top) Location = new Point(x, y);
+            return shrunk;
         }
 
         void BuildActionPanels()
@@ -486,7 +540,7 @@ namespace WinDeck
 
         void BrowseFile()
         {
-            using (var ofd = new OpenFileDialog())
+            using (var ofd = new OpenFileDialog { RestoreDirectory = true }) // 고른 폴더가 WinDeck 의 작업 폴더로 남지 않게
             {
                 ofd.Title = "실행할 파일 선택";
                 ofd.Filter = "프로그램 (*.exe;*.lnk;*.bat;*.cmd)|*.exe;*.lnk;*.bat;*.cmd|모든 파일 (*.*)|*.*";
@@ -524,7 +578,7 @@ namespace WinDeck
 
         void PickIcon()
         {
-            using (var ofd = new OpenFileDialog())
+            using (var ofd = new OpenFileDialog { RestoreDirectory = true }) // 고른 폴더가 WinDeck 의 작업 폴더로 남지 않게
             {
                 ofd.Title = "버튼 이미지 선택";
                 ofd.Filter = "이미지 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.ico)|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.ico|프로그램 아이콘 (*.exe)|*.exe|모든 파일 (*.*)|*.*";

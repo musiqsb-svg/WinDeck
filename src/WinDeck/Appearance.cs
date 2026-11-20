@@ -48,11 +48,24 @@ namespace WinDeck
 
         public static void Paint(Graphics g, Rectangle r, PanelBackground bg, int topBand)
         {
-            using (var b = new SolidBrush(BaseColor(bg))) g.FillRectangle(b, r);
-            if (!HasImage(bg)) return;
-            using (Image img = Decode(bg.ImageData))
+            if (!HasImage(bg))
             {
-                if (img == null) return;
+                Paint(g, r, bg, topBand, null);
+                return;
+            }
+            using (Image img = Decode(bg.ImageData)) Paint(g, r, bg, topBand, img);
+        }
+
+        /// <summary>
+        /// decoded: bg.ImageData 를 미리 풀어 둔 그림 (DecodeImage). 같은 배경을 여러 번 그리는 곳(설정 창 미리보기)이
+        /// 그릴 때마다 이미지를 다시 풀지 않게 한다. null 이면 이미지 없이 바탕색만 칠한다.
+        /// </summary>
+        public static void Paint(Graphics g, Rectangle r, PanelBackground bg, int topBand, Image decoded)
+        {
+            using (var b = new SolidBrush(BaseColor(bg))) g.FillRectangle(b, r);
+            Image img = decoded;
+            if (!HasImage(bg) || img == null) return;
+            {
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 var src = new RectangleF(0, 0, img.Width, img.Height);
@@ -83,6 +96,12 @@ namespace WinDeck
                     g.FillRectangle(lg, r.X, r.Y, r.Width, topBand);
         }
 
+        /// <summary>배경 이미지 데이터를 그림으로 푼다 (쓴 뒤 Dispose). 풀지 못하면 null.</summary>
+        public static Image DecodeImage(string data)
+        {
+            return string.IsNullOrEmpty(data) ? null : Decode(data);
+        }
+
         static Image Decode(string data)
         {
             try
@@ -95,6 +114,36 @@ namespace WinDeck
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// 사진에 적힌 회전 정보(EXIF Orientation)대로 그림을 돌린다. 휴대폰으로 세로로 찍은 사진은 파일 안에서는
+        /// 누워 있고 "돌려서 보라"는 표시만 있다. 이 표시를 따르지 않으면 탐색기에서 바로 서 보이던 사진이 옆으로 눕는다.
+        /// </summary>
+        public static void ApplyOrientation(Image img)
+        {
+            const int OrientationId = 0x0112;
+            try
+            {
+                if (img == null || Array.IndexOf(img.PropertyIdList, OrientationId) < 0) return;
+                byte[] v = img.GetPropertyItem(OrientationId).Value;
+                if (v == null || v.Length == 0) return;
+                RotateFlipType t;
+                switch (v[0])
+                {
+                    case 2: t = RotateFlipType.RotateNoneFlipX; break;
+                    case 3: t = RotateFlipType.Rotate180FlipNone; break;
+                    case 4: t = RotateFlipType.Rotate180FlipX; break;
+                    case 5: t = RotateFlipType.Rotate90FlipX; break;
+                    case 6: t = RotateFlipType.Rotate90FlipNone; break;
+                    case 7: t = RotateFlipType.Rotate270FlipX; break;
+                    case 8: t = RotateFlipType.Rotate270FlipNone; break;
+                    default: return;
+                }
+                img.RotateFlip(t);
+                img.RemovePropertyItem(OrientationId);
+            }
+            catch (Exception) { } // 회전 정보를 읽지 못하는 그림은 그대로 쓴다
         }
 
         /// <summary>배경 위 글자(페이지 이름 등)를 밝은 색/어두운 색 중 무엇으로 쓸지.</summary>
@@ -123,6 +172,7 @@ namespace WinDeck
             using (FileStream fs = File.OpenRead(file))
             using (Image src = Image.FromStream(fs))
             {
+                ApplyOrientation(src);
                 float s = Math.Min(1f, (float)MaxImageSide / Math.Max(src.Width, src.Height));
                 int w = Math.Max(1, (int)Math.Round(src.Width * s));
                 int h = Math.Max(1, (int)Math.Round(src.Height * s));

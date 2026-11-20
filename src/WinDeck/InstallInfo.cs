@@ -57,7 +57,19 @@ namespace WinDeck
 
         static string Folder(Environment.SpecialFolder real, string testName)
         {
-            return Test ? Path.Combine(TestRoot, testName) : Environment.GetFolderPath(real);
+            return Test ? Path.Combine(TestRoot, testName) : RealFolder(real);
+        }
+
+        /// <summary>
+        /// Windows 의 사용자 폴더. Windows 가 알려 주지 못하면(빈 문자열) 멈춘다:
+        /// 빈 경로로 이어 붙이면 현재 작업 폴더 아래의 상대 경로가 되어, 엉뚱한 곳에 설치하거나 지우게 된다.
+        /// </summary>
+        static string RealFolder(Environment.SpecialFolder folder)
+        {
+            string path = Environment.GetFolderPath(folder);
+            if (string.IsNullOrEmpty(path) || !Path.IsPathRooted(path))
+                throw new InvalidOperationException("Windows 사용자 폴더를 찾지 못했습니다: " + folder);
+            return path;
         }
 
         public static string LocalAppData
@@ -107,7 +119,7 @@ namespace WinDeck
         {
             get
             {
-                if (!Test) return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppName);
+                if (!Test) return Path.Combine(RealFolder(Environment.SpecialFolder.ApplicationData), AppName);
                 string d = Environment.GetEnvironmentVariable("WINDECK_CONFIG_DIR");
                 return string.IsNullOrWhiteSpace(d) ? Path.Combine(Path.GetTempPath(), "WinDeck-test", AppInstance.TestId) : d.Trim();
             }
