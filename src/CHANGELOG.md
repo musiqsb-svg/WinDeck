@@ -41,6 +41,9 @@
 
 ## 1.3.0 — 2026-10-27
 
+> [!NOTE]
+> 이 판의 파일은 2026-11-19부터 받을 수 없습니다. 최신 판을 받으십시오: https://github.com/musiqsb-svg/WinDeck/releases/latest
+
 > [!WARNING]
 > **Microsoft Edge로는 설치되지 않습니다.** Chrome, 네이버 웨일, Firefox 등 다른 브라우저로 내려받으세요.
 
@@ -78,6 +81,9 @@
 
 ## 1.2.0 — 2026-10-26
 
+> [!NOTE]
+> 이 판의 파일은 2026-11-19부터 받을 수 없습니다. 최신 판을 받으십시오: https://github.com/musiqsb-svg/WinDeck/releases/latest
+
 > [!WARNING]
 > **Microsoft Edge로는 설치되지 않습니다.** Chrome, 네이버 웨일, Firefox 등 다른 브라우저로 내려받으세요.
 
@@ -111,6 +117,9 @@
 
 ## 1.1.0 — 2026-10-22
 
+> [!NOTE]
+> 이 판의 파일은 2026-11-19부터 받을 수 없습니다. 최신 판을 받으십시오: https://github.com/musiqsb-svg/WinDeck/releases/latest
+
 > [!WARNING]
 > **Microsoft Edge로는 설치되지 않습니다.** Chrome, 네이버 웨일, Firefox 등 다른 브라우저로 내려받으세요.
 
@@ -134,6 +143,9 @@
 - 버튼 단축키로 문장을 입력할 때 누르고 있던 Ctrl/Alt 를 뗀 뒤 입력, Alt 를 뗄 때 메뉴가 열리지 않게 처리
 
 ## 1.0.0 — 2026-10-08
+
+> [!NOTE]
+> 이 판의 파일은 2026-11-19부터 받을 수 없습니다. 최신 판을 받으십시오: https://github.com/musiqsb-svg/WinDeck/releases/latest
 
 첫 배포 버전.
 
